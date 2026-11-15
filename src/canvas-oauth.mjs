@@ -120,7 +120,7 @@ export function createCanvasOAuthLifecycle(configuration) {
   const completionBase = fixedHttpsUrl(configuration.completionUrl, 'invalid_completion_url', true);
   requireMethods(configuration.repository, [
     'getPlatform', 'connection', 'saveAuthorization', 'markAuthorizationPending',
-    'consumeAuthorization', 'publishConnection', 'markConnected',
+    'consumeAuthorization', 'cancelAuthorization', 'publishConnection', 'markConnected',
   ], 'invalid_repository');
   requireMethods(configuration.secretVault, ['metadata', 'get', 'put', 'delete'], 'invalid_secret_vault');
   requireMethods(configuration.provider, ['exchange'], 'invalid_provider');
@@ -171,6 +171,7 @@ export function createCanvasOAuthLifecycle(configuration) {
       const now = clock();
       if (!Number.isSafeInteger(now) || now <= 0) fail('clock_unavailable');
       const authorization = Object.freeze({
+        authorizationId: stateHash(state),
         organizationId,
         platformId,
         canvasOrigin: origin,
@@ -188,12 +189,10 @@ export function createCanvasOAuthLifecycle(configuration) {
       const saved = await repository.saveAuthorization(authorization);
       if (saved !== true) fail('authorization_store_conflict');
       const patched = await repository.markAuthorizationPending(
-        organizationId, platformId, platform.configVersion,
+        organizationId, platformId, platform.configVersion, authorization.authorizationId,
       );
       if (patched !== true) {
-        if (typeof repository.cancelAuthorization === 'function') {
-          try { await repository.cancelAuthorization(authorization.stateHash); } catch { /* best-effort cleanup */ }
-        }
+        try { await repository.cancelAuthorization(authorization.stateHash); } catch { /* expires after the short authorization TTL */ }
         fail('platform_configuration_changed');
       }
       return Object.freeze({ authorizationUrl: url, redirectUri, scopes });
