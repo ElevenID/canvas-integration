@@ -6,7 +6,9 @@
   "description": "Server-side Canvas integration client using only the public ElevenID Gateway",
   "license": "AGPL-3.0-only",
   "repository": "github:ElevenID/canvas-integration",
-  "engines": { "node": ">=22.16.0" },
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "exports": {
     ".": {
       "browser": "./src/browser-denied.mjs",
@@ -22,6 +24,16 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/canvas-rest-reader.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./canvas-oauth": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/canvas-oauth.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./canvas-oauth-provider": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/canvas-oauth-provider.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
@@ -30,5 +42,11 @@
     "check": "npm run check:boundary && npm test",
     "probe": "node bin/probe.mjs"
   },
-  "files": ["src", "bin", "LICENSE", "README.md", "NOTICE.md"]
+  "files": [
+    "src",
+    "bin",
+    "LICENSE",
+    "README.md",
+    "NOTICE.md"
+  ]
 }
