@@ -1,0 +1,30 @@
+# Example only. Requires an enforcing CNI and a dedicated connector namespace.
+# Replace the documentation IP with the reviewed public Gateway address.
+# No core services, storage, general Internet egress or inbound traffic allowed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canvas-gateway-only
+  namespace: canvas-integration
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: canvas-integration
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.1/32
+      ports:
+        - {protocol: TCP, port: 443}
