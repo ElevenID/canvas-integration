@@ -23,6 +23,18 @@ allowlisted observation. It cannot call Marty, write evidence, approve or sign.
 See `docs/REST_PROVIDER.md` for usage, failure behavior and intentional differences
 from the original in-core provider.
 
+The server-only Canvas OAuth modules now provide a service-level authorization
+code flow and pinned token exchange. They hash and consume one-time state,
+bind callbacks to a fixed connector URI and platform configuration version,
+and store client/access/refresh secrets only through an injected
+connector-owned vault adapter. See `docs/OAUTH_PROVIDER.md`.
+
+**OAuth HTTP routes and production storage are not yet wired.** The lifecycle
+requires connector-owned transactional repository and encrypted-vault adapters;
+it has no in-memory or plaintext fallback. Refresh scheduling, durable token
+revocation, LTI launch verification, AGS/NRPS and the administration UI remain
+separate extraction stages.
+
 **This is not yet a standalone Canvas LTI service or a completed extraction.**
 The Gateway compatibility client still addresses existing Canvas APIs. The REST
 reader is not wired into the live worker. LTI/OAuth, AGS/NRPS, connector storage,
