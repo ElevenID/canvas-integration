@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Fail on unreviewed runtime modules, dependencies or transport entry points.
+
+This is a regression gate, not a sandbox for malicious JavaScript. Deployment
+network isolation and Gateway authorization remain separate requirements.
+"""
+import json
+from pathlib import Path
+import re
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+IMPORTS = {
+    "src/operations.mjs": set(),
+    "src/browser-denied.mjs": set(),
+    "src/gateway-client.mjs": {"node:https", "./operations.mjs"},
+    "src/configuration.mjs": {"node:fs/promises", "./gateway-client.mjs"},
+    "bin/probe.mjs": {"../src/gateway-client.mjs", "../src/configuration.mjs"},
+}
+IMPORT = re.compile(r"^import\s+[^;]+?\s+from\s+['\"]([^'\"]+)['\"];", re.MULTILINE)
+DYNAMIC = re.compile(r"\b(?:eval|require|fetch|WebSocket|XMLHttpRequest)\s*\(|\bimport\s*\(|\bnew\s+Function\b|process\s*\.\s*(?:binding|dlopen)\b")
+
+
+def audit(root: Path) -> list[str]:
+    errors = []
+    files = {path.relative_to(root).as_posix(): path for parent in ("src", "bin")
+             for path in (root / parent).rglob("*") if path.is_file() or path.is_symlink()}
+    if set(files) != set(IMPORTS):
+        errors.append("runtime file inventory differs from reviewed boundary")
+    for name, path in files.items():
+        if path.is_symlink():
+            errors.append(f"runtime symlink forbidden: {name}")
+            continue
+        source = path.read_text(encoding="utf-8")
+        if set(IMPORT.findall(source)) != IMPORTS.get(name, set()):
+            errors.append(f"unreviewed import: {name}")
+        if DYNAMIC.search(source):
+            errors.append(f"dynamic code or alternate transport: {name}")
+        # New import syntaxes require an explicit review of this gate.
+        without_imports = IMPORT.sub("", source)
+        if re.search(r"^\s*(?:import\s|export\s+.*\bfrom\s)", without_imports, re.MULTILINE):
+            errors.append(f"unreviewed module syntax: {name}")
+    package = json.loads((root / "package.json").read_text())
+    for field in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        if package.get(field):
+            errors.append(f"unreviewed package dependencies: {field}")
+    lock = json.loads((root / "package-lock.json").read_text())
+    if set(lock.get("packages", {})) != {""}:
+        errors.append("lock contains unreviewed external packages")
+    expected = {".": "./src/gateway-client.mjs", "./configuration": "./src/configuration.mjs"}
+    if set(package.get("exports", {})) != set(expected):
+        errors.append("unexpected package export")
+    for name, target in expected.items():
+        if package.get("exports", {}).get(name) != {
+            "browser": "./src/browser-denied.mjs", "node": target,
+            "default": "./src/browser-denied.mjs"}:
+            errors.append(f"server-only export boundary changed: {name}")
+    client = (root / "src/gateway-client.mjs").read_text()
+    for invariant in ("rejectUnauthorized: true", "agent: false", "'X-API-Key': apiKey",
+                      "'X-Organization-ID': organizationId", "redirect_denied", "operation_not_allowed"):
+        if invariant not in client:
+            errors.append("Gateway transport invariant missing")
+    for workflow in (root / ".github/workflows").glob("*.yml"):
+        text = workflow.read_text()
+        for action in re.findall(r"uses:\s*([^\s]+)", text):
+            if not re.fullmatch(r"[A-Za-z0-9_./-]+@[0-9a-f]{40}", action):
+                errors.append("workflow action is not commit-pinned")
+        if "pull_request_target" in text or re.search(r"secrets\s*\.", text):
+            errors.append("unreviewed privileged workflow")
+    return errors
+
+
+if __name__ == "__main__":
+    violations = audit(ROOT)
+    if violations:
+        print("Boundary check failed:\n" + "\n".join(violations), file=sys.stderr)
+        sys.exit(1)
+    print("Boundary check passed: five runtime modules, one HTTPS owner, no external dependencies.")
