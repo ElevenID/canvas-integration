@@ -17,6 +17,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/configuration.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./canvas-rest": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/canvas-rest-reader.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {

@@ -1,10 +1,11 @@
 # Example only. Requires an enforcing CNI and a dedicated connector namespace.
-# Replace the documentation IP with the reviewed public Gateway address.
+# Replace documentation IPs with separately reviewed public Gateway/Canvas IPs.
 # No core services, storage, general Internet egress or inbound traffic allowed.
+# This file has NOT been applied or tested against a live cluster.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: canvas-gateway-only
+  name: canvas-external-services-only
   namespace: canvas-integration
 spec:
   podSelector:
@@ -25,6 +26,11 @@ spec:
         - {protocol: TCP, port: 53}
     - to:
         - ipBlock:
-            cidr: 192.0.2.1/32
+            cidr: 192.0.2.1/32 # Public Common Gateway only
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.2/32 # Separately reviewed Canvas origin only
       ports:
         - {protocol: TCP, port: 443}

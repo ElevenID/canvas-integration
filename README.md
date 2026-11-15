@@ -5,24 +5,29 @@ Connector-to-core requests use the public Common Gateway and a dedicated,
 organization-scoped API key. Direct access to Marty databases, internal APIs,
 service credentials, signing grants or private source packages is unsupported.
 
-## Implemented slice
+## Implemented slices
 
-A dependency-free, server-only Node.js client adapted from Marty-ui's Canvas
+The dependency-free, server-only Gateway client adapts Marty-ui's Canvas
 administration API module: twelve reads and ten explicitly opted-in management
-operations. The sole HTTP owner fixes the Gateway origin and organization,
-requires `X-API-Key`, validates operation inputs, verifies TLS, refuses redirects,
-bounds responses and applies an absolute request deadline. It never accepts a
-caller-provided URL, header map, cookie, bearer token or internal transport.
+operations. Its HTTP owner fixes the Gateway origin and organization, requires
+`X-API-Key`, verifies TLS, refuses redirects and bounds responses and time.
+Application approval, signing, secret export, correction-review writes and bulk
+mirror processing are absent. Browser imports fail. The read-only CLI loads its
+key from a private file and emits a count rather than returned records.
 
-Default access is read-only. Application approval, credential signing, secret
-export, correction-review actions and bulk mirror processing are absent from
-the operation registry. Browser imports fail. The CLI reads its API key from a
-private regular file and emits only a count, not returned records.
+The separate **Canvas REST evidence reader** supports assignment/assignment-backed
+quiz scores, module completion and course progress. Its token can only reach a
+fixed Canvas HTTPS origin, using reviewed read-only paths and DNS-pinned
+connections. It validates learner/resource identity and returns an unsigned,
+allowlisted observation. It cannot call Marty, write evidence, approve or sign.
+See `docs/REST_PROVIDER.md` for usage, failure behavior and intentional differences
+from the original in-core provider.
 
 **This is not yet a standalone Canvas LTI service or a completed extraction.**
-The compatibility operations still address existing Gateway Canvas APIs.
-Provider logic, LTI/OAuth, connector storage, workers and administration pages
-have not moved. No deployment is cut over by this repository.
+The Gateway compatibility client still addresses existing Canvas APIs. The REST
+reader is not wired into the live worker. LTI/OAuth, AGS/NRPS, connector storage,
+scheduling and administration pages still need extraction. No deployment is cut
+over, and the original Marty-ui implementation is retained for qualification.
 
 ## Test
 
@@ -34,12 +39,12 @@ npm ci --ignore-scripts --offline --no-audit --no-fund
 npm run check
 ```
 
-The suite uses an actual local HTTPS server with a newly generated, temporary
-certificate. It covers the complete operation registry, header/tenant binding,
-read-only defaults, forbidden authority, TLS verification, redirection, request
-validation, bounded responses, absolute deadlines and key-file permissions.
-Mutation tests verify that the architecture gate rejects introduced internal
-packages, alternate transports, dynamic imports and browser credential exports.
+Tests use actual local HTTPS peers and freshly generated temporary certificates.
+They cover Gateway operations, tenant/header binding, read-only defaults, Canvas
+resource identity, score/module/course normalization, redirection, TLS failures,
+DNS/IP policies, bounded responses/deadlines and cross-client credential isolation.
+Mutation tests reject internal imports, core credentials in provider modules,
+alternate transports, browser exports, TLS bypass and removed DNS/deadline guards.
 
 ## Read-only Gateway probe
 
