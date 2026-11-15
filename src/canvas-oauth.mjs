@@ -258,56 +258,62 @@ export function createCanvasOAuthLifecycle(configuration) {
       }
       const expiresAt = tokenExpiry(now, tokenBundle.expiresInSeconds);
       const references = [];
+      let connection;
       try {
         const accessRef = await vault.put(organizationId, {
           platformId, provider: 'canvas', purpose: 'oauth_access_token',
         }, tokenBundle.accessToken);
-        if (!safeText(accessRef, 256)) fail('secret_store_failed');
+        if (!safeText(accessRef, 256) || accessRef === authorization.clientSecretRef) fail('secret_store_failed');
         references.push(accessRef);
         let refreshRef = null;
         if (tokenBundle.refreshToken) {
           refreshRef = await vault.put(organizationId, {
             platformId, provider: 'canvas', purpose: 'oauth_refresh_token',
           }, tokenBundle.refreshToken);
-          if (!safeText(refreshRef, 256)) fail('secret_store_failed');
+          if (!safeText(refreshRef, 256) || references.includes(refreshRef)
+              || refreshRef === authorization.clientSecretRef) fail('secret_store_failed');
           references.push(refreshRef);
         }
-        const connection = Object.freeze({
-          organizationId,
-          platformId,
-          canvasOrigin: origin,
+        connection = Object.freeze({
+          organizationId, platformId, canvasOrigin: origin,
           platformConfigVersion: authorization.platformConfigVersion,
-          clientId: authorization.clientId,
-          clientSecretRef: authorization.clientSecretRef,
-          capabilities: authorization.capabilities,
-          scopes: authorization.scopes,
-          accessTokenRef: accessRef,
-          refreshTokenRef: refreshRef,
-          tokenExpiresAt: expiresAt,
-          status: 'connected',
-          createdAt: now,
-          updatedAt: now,
+          clientId: authorization.clientId, clientSecretRef: authorization.clientSecretRef,
+          capabilities: authorization.capabilities, scopes: authorization.scopes,
+          accessTokenRef: accessRef, refreshTokenRef: refreshRef, tokenExpiresAt: expiresAt,
+          status: 'connected', createdAt: now, updatedAt: now,
         });
-        const published = await repository.publishConnection(connection, authorization.platformConfigVersion);
-        if (published !== true) {
-          await cleanupTokens(organizationId, references);
-          await bestEffortRevoke(origin, tokenBundle.accessToken);
-          return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_authorization_conflict') });
-        }
-        const connected = await repository.markConnected(
-          organizationId, platformId, authorization.platformConfigVersion,
-          authorization.clientId, authorization.capabilities, authorization.scopes,
-        );
-        if (connected !== true) {
-          if (typeof repository.markReauthorizationRequired === 'function') {
-            try { await repository.markReauthorizationRequired(organizationId, platformId, now); } catch { /* best-effort */ }
-          }
-          return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_configuration_changed') });
-        }
       } catch {
         await cleanupTokens(organizationId, references);
         await bestEffortRevoke(origin, tokenBundle.accessToken);
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_secret_storage_failed') });
+      }
+
+      // A failed publication acknowledgment has an unknown commit outcome.
+      // Preserve token refs for reconciliation; deleting them could break a committed connection.
+      let published;
+      try {
+        published = await repository.publishConnection(connection, authorization.platformConfigVersion);
+      } catch {
+        return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_connection_reconciliation_required') });
+      }
+      if (published !== true) {
+        await cleanupTokens(organizationId, references);
+        await bestEffortRevoke(origin, tokenBundle.accessToken);
+        return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_authorization_conflict') });
+      }
+
+      let connected = false;
+      try {
+        connected = await repository.markConnected(
+          organizationId, platformId, authorization.platformConfigVersion,
+          authorization.clientId, authorization.capabilities, authorization.scopes,
+        );
+      } catch { /* connection is durable; mark it for reauthorization below */ }
+      if (connected !== true) {
+        if (typeof repository.markReauthorizationRequired === 'function') {
+          try { await repository.markReauthorizationRequired(organizationId, platformId, now); } catch { /* reconciliation required */ }
+        }
+        return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_configuration_changed') });
       }
       return Object.freeze({ location: completionLocation(completionBase, 'connected', platformId) });
     },
