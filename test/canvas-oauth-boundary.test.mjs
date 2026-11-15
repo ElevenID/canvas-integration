@@ -13,7 +13,7 @@ const mutations = [
   ['oauth-unpinned-dns', 'src/canvas-oauth-provider.mjs', source => source.replace('lookup: pinnedLookup', 'lookup: unreviewedLookup')],
   ['oauth-core-import', 'src/canvas-oauth.mjs', source => source + "\nimport { createGatewayClient } from './gateway-client.mjs';\n"],
   ['oauth-state-hash-removed', 'src/canvas-oauth.mjs', source => source.replace('stateHash: stateHash(state),', 'stateHash: state,')],
-  ['oauth-one-time-consume-removed', 'src/canvas-oauth.mjs', source => source.replace('repository.consumeAuthorization', 'repository.readAuthorization')],
+  ['oauth-one-time-consume-removed', 'src/canvas-oauth.mjs', source => source.replaceAll('repository.consumeAuthorization', 'repository.readAuthorization')],
 ];
 
 for (const [name, path, mutate] of mutations) {
