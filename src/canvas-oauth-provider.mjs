@@ -22,13 +22,12 @@ function retryAfter(value) {
   if (/^\d{1,6}$/.test(value)) return Math.min(Number(value), 3600);
   return undefined;
 }
+const TOKEN = /^[A-Za-z0-9._~+/-]{16,4096}={0,2}$/;
 function validateTokenResponse(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)
-      || typeof value.access_token !== 'string' || value.access_token.length < 1
-      || value.access_token.length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(value.access_token)
+      || typeof value.access_token !== 'string' || !TOKEN.test(value.access_token)
       || (value.refresh_token !== undefined && value.refresh_token !== null
-        && (typeof value.refresh_token !== 'string' || value.refresh_token.length < 1
-          || value.refresh_token.length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(value.refresh_token)))
+        && (typeof value.refresh_token !== 'string' || !TOKEN.test(value.refresh_token)))
       || (value.expires_in !== undefined && value.expires_in !== null
         && (!Number.isSafeInteger(value.expires_in) || value.expires_in < 0 || value.expires_in > 315360000))
       || (value.token_type !== undefined && String(value.token_type).toLowerCase() !== 'bearer')) {
