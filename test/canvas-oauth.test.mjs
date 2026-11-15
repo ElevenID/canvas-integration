@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
 
 const ORG = 'org-one';
@@ -268,4 +270,17 @@ test('callback response never reflects caller-controlled redirect or error text'
   assert.equal(location.origin, 'https://console.example.test');
   assert.equal(location.searchParams.get('error_code'), 'oauth_authorization_denied');
   assert.equal(location.searchParams.has('token'), false);
+});
+
+test('Canvas OAuth modules fail closed under browser export conditions', async () => {
+  const run = promisify(execFile);
+  for (const name of ['canvas-oauth', 'canvas-oauth-provider']) {
+    await assert.rejects(run(process.execPath, [
+      '--conditions=browser', '--input-type=module', '-e',
+      `await import('@elevenid/canvas-integration/${name}')`,
+    ]), error => {
+      assert.match(error.stderr, /server-only/);
+      return true;
+    });
+  }
 });
