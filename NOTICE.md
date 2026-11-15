@@ -24,7 +24,7 @@ UI and provider behavior are independently qualified.
 The route selection, exact assignment denominator read, normalized observation
 concept and negative-observation/error distinction in `src/canvas-rest-*.mjs`
 are adapted from these Marty-ui files at commit
-`58ec9e79150e6a1d05af061445d4c761cce42e8e`:
+`6cb818be55b270313b01f0523ad21830be752b56`:
 
 - `rust/services/issuance/src/canvas_sync_provider_http.rs`, blob
   `98784a7363b9669e95022fd739101fcb3294b384` (REST read/provider boundary).
