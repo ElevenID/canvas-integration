@@ -19,6 +19,8 @@ IMPORTS = {
     "src/canvas-rest-contract.mjs": set(),
     "src/canvas-rest-network.mjs": {"node:dns/promises", "node:net", "./canvas-rest-contract.mjs"},
     "src/canvas-rest-reader.mjs": {"node:https", "./canvas-rest-contract.mjs", "./canvas-rest-network.mjs"},
+    "src/canvas-oauth.mjs": {"node:crypto", "./canvas-rest-network.mjs"},
+    "src/canvas-oauth-provider.mjs": {"node:https", "./canvas-rest-network.mjs"},
 }
 IMPORT = re.compile(r"^import\s+[^;]+?\s+from\s+['\"]([^'\"]+)['\"];", re.MULTILINE)
 DYNAMIC = re.compile(r"\b(?:eval|require|fetch|WebSocket|XMLHttpRequest)\s*\(|\bimport\s*\(|\bnew\s+Function\b|process\s*\.\s*(?:binding|dlopen)\b")
@@ -43,7 +45,7 @@ def audit(root: Path) -> list[str]:
         without_imports = IMPORT.sub("", source)
         if re.search(r"^\s*(?:import\s|export\s+.*\bfrom\s)", without_imports, re.MULTILINE):
             errors.append(f"unreviewed module syntax: {name}")
-        if name.startswith("src/canvas-rest-") and re.search(
+        if name.startswith(("src/canvas-rest-", "src/canvas-oauth")) and re.search(
             r"X-API-Key|X-Organization-ID|gatewayOrigin|apiKey|process\s*\.\s*env|/internal/", source
         ):
             errors.append(f"core authority in Canvas provider: {name}")
@@ -55,7 +57,9 @@ def audit(root: Path) -> list[str]:
     if set(lock.get("packages", {})) != {""}:
         errors.append("lock contains unreviewed external packages")
     expected = {".": "./src/gateway-client.mjs", "./configuration": "./src/configuration.mjs",
-                "./canvas-rest": "./src/canvas-rest-reader.mjs"}
+                "./canvas-rest": "./src/canvas-rest-reader.mjs",
+                "./canvas-oauth": "./src/canvas-oauth.mjs",
+                "./canvas-oauth-provider": "./src/canvas-oauth-provider.mjs"}
     if set(package.get("exports", {})) != set(expected):
         errors.append("unexpected package export")
     for name, target in expected.items():
@@ -74,6 +78,19 @@ def audit(root: Path) -> list[str]:
                       "controller.abort()", "prepareRequirement(input)"):
         if invariant not in provider:
             errors.append("Canvas provider transport invariant missing")
+    oauth = (root / "src/canvas-oauth-provider.mjs").read_text()
+    for invariant in ("rejectUnauthorized: true", "agent: false", "method:", "POST",
+                      "resolveAddress(origin", "lookup: pinnedLookup",
+                      "/login/oauth2/token", "redirect_denied", "controller.abort()",
+                      "grant_type: grantType"):
+        if invariant not in oauth:
+            errors.append("Canvas OAuth transport invariant missing")
+    lifecycle = (root / "src/canvas-oauth.mjs").read_text()
+    for invariant in ("createHash", "stateHash: stateHash(state)", "repository.consumeAuthorization(stateHash(input.state)",
+                      "cancelAuthorization", "clientSecretRef", "accessTokenRef",
+                      "publishConnection", "completionLocation"):
+        if invariant not in lifecycle:
+            errors.append("Canvas OAuth lifecycle invariant missing")
     for workflow in (root / ".github/workflows").glob("*.yml"):
         text = workflow.read_text()
         for action in re.findall(r"uses:\s*([^\s]+)", text):
@@ -89,4 +106,4 @@ if __name__ == "__main__":
     if violations:
         print("Boundary check failed:\n" + "\n".join(violations), file=sys.stderr)
         sys.exit(1)
-    print("Boundary check passed: eight runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")
+    print("Boundary check passed: ten runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")

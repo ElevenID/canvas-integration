@@ -18,6 +18,22 @@ trust/approval authority. Cross-client HTTPS tests prove neither credential is
 sent to the other peer, including through malicious redirects. See
 `REST_PROVIDER.md` for the exact supported scope and unqualified behavior.
 
+The new `src/canvas-oauth.mjs` owns the service-level authorization-code
+lifecycle; `src/canvas-oauth-provider.mjs` owns the Canvas token-endpoint HTTPS
+transport. Both are server-only and have no Gateway imports. OAuth state is
+random, hash-only at rest, ten-minute and one-time. Platform configuration
+version checks prevent callbacks from completing against changed Canvas
+configuration. Client/access/refresh secrets are stored only through an
+injected connector-owned vault; durable records contain opaque references.
+Token exchange is pinned to a vetted Canvas address with verified TLS, no
+redirects, bounded response bytes and one absolute deadline.
+
+These modules are a lifecycle engine, not a deployed OAuth service. The
+repository/vault interfaces require production adapters; no in-memory or
+plaintext fallback is shipped. The callback HTTP adapter, encrypted connector
+vault, transactional connector database, refresh leases and durable revocation
+worker remain unimplemented. See `OAUTH_PROVIDER.md`.
+
 CLI configuration rejects inherited core database/service credentials. Future
 connector-owned storage must use distinct configuration and credentials, not
 Marty's `DATABASE_URL`, Redis, service keys or signer authority. The Canvas
@@ -25,7 +41,7 @@ reader takes explicit server-side configuration; it does not read inherited
 service credentials from the environment.
 
 The package has no runtime or development dependencies. CI verifies its runtime
-file/import inventory, server-only exports, lockfile and transport invariants.
+file/import inventory, server-only exports, lockfile and Gateway, Canvas REST and OAuth transport invariants.
 These checks are regression guards, not a sandbox against malicious source code.
 They require review and must be protected by repository rules before release.
 
@@ -34,7 +50,7 @@ They require review and must be protected by repository rules before release.
 An origin allowlist cannot prove that an operator configured the genuine Gateway
 or Canvas tenant. The operator must verify endpoints and certificates. Deploy
 the connector outside core private networks. Allow only separately reviewed
-Gateway/Canvas destinations and connector-owned services; prohibit core databases,
+Gateway/Canvas OAuth and REST destinations and connector-owned services; prohibit core databases,
 internal services, metadata endpoints and shared Docker sockets.
 
 The Kubernetes example defaults to no ingress and only DNS plus separate
@@ -70,10 +86,12 @@ mapping; OAuth token possession alone does not authorize arbitrary browser IDs.
    application/subject linking, result/status reads and delivery acknowledgments.
    Never expose internal endpoints or simply assert that external facts are
    trusted. Bind sources, evidence types and tenant authority through policy.
-3. Extract LTI/OAuth/AGS/NRPS and Rust workers without core imports or persistence.
-   Qualify the extracted REST reader against actual Canvas before replacing the
-   in-core adapter. Keep token custody and tool signing distinct from canonical
-   credential signing. Do not call legacy event ingest as an admission shortcut.
+3. Complete the connector-owned OAuth repository, encrypted vault, callback
+   HTTP adapter, refresh/revocation worker and LTI/AGS/NRPS providers. Qualify
+   the extracted OAuth and REST adapters against a synthetic Canvas tenant
+   before replacing the in-core implementation. Keep tool signing distinct
+   from canonical credential signing. Do not call legacy event ingest as an
+   admission shortcut.
 4. Extract Canvas administration and learner interfaces. Their backend must
    authenticate users and authorize actions before using scoped Gateway keys.
    A broad API-key-backed proxy accessible to learners is prohibited.
