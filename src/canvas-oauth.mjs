@@ -206,8 +206,21 @@ export function createCanvasOAuthLifecycle(configuration) {
       const now = clock();
       if (!Number.isSafeInteger(now) || now <= 0) fail('clock_unavailable');
       const authorization = await repository.consumeAuthorization(stateHash(input.state), now);
-      if (!isRecord(authorization) || authorization.expiresAt <= now) {
+      if (!isRecord(authorization) || authorization.stateHash !== stateHash(input.state)
+          || !Number.isSafeInteger(authorization.expiresAt) || authorization.expiresAt <= now) {
         return Object.freeze({ location: completionLocation(completionBase, 'error', undefined, 'oauth_state_invalid') });
+      }
+      let capabilities;
+      let scopes;
+      try {
+        capabilities = normalizeCapabilities(authorization.capabilities);
+        scopes = scopesForCapabilities(capabilities);
+      } catch {
+        return Object.freeze({ location: completionLocation(completionBase, 'error', authorization.platformId, 'oauth_configuration_changed') });
+      }
+      if (JSON.stringify(capabilities) !== JSON.stringify(authorization.capabilities)
+          || JSON.stringify(scopes) !== JSON.stringify(authorization.scopes)) {
+        return Object.freeze({ location: completionLocation(completionBase, 'error', authorization.platformId, 'oauth_configuration_changed') });
       }
       const platformId = authorization.platformId;
       const organizationId = authorization.organizationId;
