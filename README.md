@@ -53,10 +53,12 @@ npm run check
 
 Tests use actual local HTTPS peers and freshly generated temporary certificates.
 They cover Gateway operations, tenant/header binding, read-only defaults, Canvas
-resource identity, score/module/course normalization, redirection, TLS failures,
-DNS/IP policies, bounded responses/deadlines and cross-client credential isolation.
-Mutation tests reject internal imports, core credentials in provider modules,
-alternate transports, browser exports, TLS bypass and removed DNS/deadline guards.
+resource identity, score/module/course normalization, OAuth state/tenant binding,
+one-time callback consumption, connector-owned secret references, token exchange,
+redirection, TLS failures, DNS/IP policies, bounded responses/deadlines and
+cross-client credential isolation. Mutation tests reject internal imports, core
+credentials in provider modules, alternate transports, browser exports, TLS
+bypass, removed DNS pinning and weakened OAuth state handling.
 
 ## Read-only Gateway probe
 
