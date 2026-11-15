@@ -86,7 +86,7 @@ def audit(root: Path) -> list[str]:
         if invariant not in oauth:
             errors.append("Canvas OAuth transport invariant missing")
     lifecycle = (root / "src/canvas-oauth.mjs").read_text()
-    for invariant in ("createHash", "consumeAuthorization", "stateHash",
+    for invariant in ("createHash", "stateHash: stateHash(state)", "repository.consumeAuthorization(stateHash(input.state)",
                       "cancelAuthorization", "clientSecretRef", "accessTokenRef",
                       "publishConnection", "completionLocation"):
         if invariant not in lifecycle:
