@@ -18,3 +18,22 @@ of silently producing an empty list. Approval, signing, secret management,
 OAuth callbacks, correction-review writes, and mirror batch controls are not
 exported. The original console module remains in Marty-ui until replacement
 UI and provider behavior are independently qualified.
+
+## REST provider extraction baseline (2026-11-15)
+
+The route selection, exact assignment denominator read, normalized observation
+concept and negative-observation/error distinction in `src/canvas-rest-*.mjs`
+are adapted from these Marty-ui files at commit
+`58ec9e79150e6a1d05af061445d4c761cce42e8e`:
+
+- `rust/services/issuance/src/canvas_sync_provider_http.rs`, blob
+  `98784a7363b9669e95022fd739101fcb3294b384` (REST read/provider boundary).
+- `rust/services/issuance/src/canvas_sync_processor.rs`, blob
+  `d2565f6aa88726a9c36117fc1256f0a9822406ef` (observation/assertion projection).
+
+The standalone JavaScript implementation imports none of those files, crates,
+repositories, signing/OAuth services or database models. Instructure's public
+REST contracts are referenced in `docs/REST_PROVIDER.md`. That document records
+intentional stricter validation and module-state/grade corrections; no complete
+legacy parity or production cutover is claimed. Existing AGPL notices remain
+applicable. The original implementation and historical oracles are retained.
