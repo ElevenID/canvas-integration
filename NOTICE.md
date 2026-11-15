@@ -37,3 +37,24 @@ REST contracts are referenced in `docs/REST_PROVIDER.md`. That document records
 intentional stricter validation and module-state/grade corrections; no complete
 legacy parity or production cutover is claimed. Existing AGPL notices remain
 applicable. The original implementation and historical oracles are retained.
+
+## OAuth lifecycle extraction baseline (2026-11-15)
+
+The Canvas OAuth authorization-code state machine, capability/scope mapping,
+configuration-version checks, secret-reference lifecycle and token refresh
+semantics in `src/canvas-oauth*.mjs` are adapted from ElevenID/marty-ui at
+commit `58ec9e79150e6a1d05af061445d4c761cce42e8e`:
+
+- `rust/services/issuance/src/canvas_oauth.rs`, blob
+  `fbf1769cd3da2ee38e64ab275d748e16647a65d2` (OAuth lifecycle and capability
+  allowlist).
+- `rust/services/issuance/src/canvas_oauth_postgres.rs`, blob
+  `954db9139de460e096f774d66905baf0c54ce610` (existing durable state,
+  one-time authorization consumption, refresh/revocation lease patterns).
+
+The connector implementation is an independent JavaScript adaptation. It does
+not import those Rust files or crates and does not use Marty database tables,
+integration-secret vaults, service credentials or private HTTP routes. It
+replaces the old core-owned secret references with connector-owned vault
+references. Existing AGPL notices remain applicable; the original implementation
+and historical tests are retained in Marty-ui pending independent qualification.
