@@ -120,7 +120,7 @@ export function createCanvasOAuthLifecycle(configuration) {
   const completionBase = fixedHttpsUrl(configuration.completionUrl, 'invalid_completion_url', true);
   requireMethods(configuration.repository, [
     'getPlatform', 'connection', 'saveAuthorization', 'markAuthorizationPending',
-    'consumeAuthorization', 'cancelAuthorization', 'publishConnection', 'markConnected',
+    'consumeAuthorization', 'cancelAuthorization', 'publishConnection', 'markConnected', 'markReauthorizationRequired',
   ], 'invalid_repository');
   requireMethods(configuration.secretVault, ['metadata', 'get', 'put', 'delete'], 'invalid_secret_vault');
   requireMethods(configuration.provider, ['exchange'], 'invalid_provider');
