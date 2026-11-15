@@ -4,6 +4,7 @@ import { canvasOrigin } from './canvas-rest-network.mjs';
 
 const AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const TOKEN = /^[A-Za-z0-9._~+/-]{16,4096}={0,2}$/;
 const CAPABILITY_SCOPES = Object.freeze({
   catalog: [
     'url:GET|/api/v1/courses',
@@ -104,8 +105,8 @@ function completionLocation(base, outcome, platformId, errorCode) {
   return result.href;
 }
 function validateTokenBundle(bundle) {
-  if (!isRecord(bundle) || !safeText(bundle.accessToken, 4096)
-      || (bundle.refreshToken !== undefined && bundle.refreshToken !== null && !safeText(bundle.refreshToken, 4096))
+  if (!isRecord(bundle) || !TOKEN.test(bundle.accessToken)
+      || (bundle.refreshToken !== undefined && bundle.refreshToken !== null && !TOKEN.test(bundle.refreshToken))
       || (bundle.expiresInSeconds !== undefined && bundle.expiresInSeconds !== null
           && (!Number.isSafeInteger(bundle.expiresInSeconds) || bundle.expiresInSeconds < 0
             || bundle.expiresInSeconds > 315360000))) fail('invalid_provider_response');
