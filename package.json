@@ -89,6 +89,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/observation-submit.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./observation-outbox": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/observation-outbox.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
