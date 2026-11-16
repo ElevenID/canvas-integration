@@ -83,6 +83,10 @@ export function createPostgresRepository(pool) {
       return (await first('SELECT canvas_connector.retry_revocation($1,$2) AS ok', [id, lease])).ok === true;
     },
     getPlatform: (org, id) => first(platform, [org, id]),
+    configuredClient: (org,id,version) => first(`SELECT c.client_id AS "clientId",c.client_secret_ref AS "clientSecretRef"
+      FROM canvas_connector.oauth_client_configurations c JOIN canvas_connector.platforms p
+      ON p.organization_id=c.organization_id AND p.id=c.platform_id AND p.config_version=c.platform_config_version
+      WHERE c.organization_id=$1 AND c.platform_id=$2 AND p.config_version=$3 AND p.enabled AND NOT p.archived`,[org,id,version]),
     connection: (org, id) => first(connection, [org, id]),
     async saveAuthorization(value) {
       const result = await query(`INSERT INTO canvas_connector.authorizations

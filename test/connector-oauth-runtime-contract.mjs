@@ -204,13 +204,15 @@ try {
   owner("UPDATE canvas_connector.oauth_http_limit SET request_limit=60,hits=0,window_started_at=clock_timestamp();");
   await pool.query('INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled) VALUES ($1,$2,$3,true)', [org, 'runtime-platform', canvas.origin]);
   const scope = { platformId: 'runtime-platform', provider: 'canvas', purpose: 'oauth_client_secret' };
-  const reference = await vault.put(org, scope, CLIENT);
+  let reference;
   owner(`CREATE ROLE canvas_oauth_http LOGIN PASSWORD 'synthetic-oauth-http-password';
     GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_oauth_http;
     GRANT USAGE ON SCHEMA canvas_connector TO canvas_oauth_http;
     GRANT SELECT ON canvas_connector.platforms,canvas_connector.oauth_http_limit TO canvas_oauth_http;
     GRANT INSERT ON canvas_connector.platforms TO canvas_oauth_http;
     GRANT SELECT,INSERT ON canvas_connector.platform_operation_audit TO canvas_oauth_http;
+    GRANT SELECT,INSERT ON canvas_connector.oauth_client_configurations,canvas_connector.oauth_client_provisioning_audit TO canvas_oauth_http;
+    GRANT UPDATE(client_id,client_secret_ref,platform_config_version) ON canvas_connector.oauth_client_configurations TO canvas_oauth_http;
     GRANT SELECT,INSERT ON canvas_connector.secrets TO canvas_oauth_http;
     GRANT SELECT,INSERT,DELETE ON canvas_connector.authorizations TO canvas_oauth_http;
     GRANT SELECT,INSERT,UPDATE ON canvas_connector.authorization_attempts TO canvas_oauth_http;
@@ -228,6 +230,7 @@ try {
       canvas_connector.recover_authorization_attempt(text,text,text,bigint,uuid,text,text) TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION canvas_connector.disconnect_connection(text,text,uuid,bigint,uuid,text) TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION canvas_connector.administer_platform(text,text,uuid,text,text,text,bigint,boolean,boolean) TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION canvas_connector.provision_oauth_client(text,text,uuid,text,bigint,text,text,text,bytea,bytea,bytea,bytea) TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION
       canvas_connector.stage_authorization_result(text,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamptz),
       canvas_connector.mark_authorization_pending(text,text,bigint,text),
@@ -250,7 +253,7 @@ try {
   } finally { owner('ALTER TABLE canvas_connector.secrets ENABLE TRIGGER secret_creation_time;'); }
   for(const [table,trigger] of [['connections','connection_identity'],['authorization_attempts','authorization_cleanup'],
     ['connection_operation_audit','connection_operation_audit_immutable'],['platforms','platform_configuration_revision'],
-    ['platform_operation_audit','platform_operation_audit_immutable']]) {
+    ['platform_operation_audit','platform_operation_audit_immutable'],['oauth_client_provisioning_audit','oauth_client_provisioning_audit_immutable']]) {
     owner(`ALTER TABLE canvas_connector.${table} DISABLE TRIGGER ${trigger};`);
     try {
       const missingGuard=await runtime({database:httpDatabase});
@@ -272,12 +275,29 @@ try {
     assert.equal((await httpPool.query("SELECT has_schema_privilege(current_user,'canvas_connector','CREATE') AS allowed")).rows[0].allowed, false);
   } finally { await httpPool.close(); }
   const server = fileCustody ? await cliRuntime() : await runtime(); const address = await server.listen();
+  assert.equal((await send(address,{body:'capabilities=catalog'}).response).status,409);
+  const clientPath='/platforms/runtime-platform/oauth/client/';
+  const provisionBody=new URLSearchParams({operation_id:randomUUID(),expected_version:'1',client_id:'runtime-client',client_secret:CLIENT}).toString();
+  permitted=false;
+  assert.equal((await send(address,{path:clientPath+'provision',body:provisionBody}).response).status,403);
+  permitted=true;
+  const provisioned=await send(address,{path:clientPath+'provision',body:provisionBody}).response;
+  assert.equal(provisioned.status,200);const clientReceipt=JSON.parse(provisioned.body).receipt;
+  assert.equal(clientReceipt.configVersion,2);reference=clientReceipt.clientSecretRef;
+  assert.equal(provisioned.body.includes(CLIENT),false);
+  assert.deepEqual(JSON.parse((await send(address,{path:clientPath+'provision',body:provisionBody}).response).body).receipt,clientReceipt);
+  const clientReceiptBody=new URLSearchParams({operation_id:clientReceipt.operationId}).toString();
+  assert.deepEqual(JSON.parse((await send(address,{path:clientPath+'receipt',body:clientReceiptBody}).response).body).receipt,clientReceipt);
+  const currentClient=JSON.parse((await send(address,{path:clientPath+'inspect',body:''}).response).body).client;
+  assert.equal(currentClient.clientId,'runtime-client');assert.equal(currentClient.clientSecretRef,reference);
+  assert.equal((await send(address,{body:new URLSearchParams({client_id:'substituted-client',client_secret_ref:reference,capabilities:'catalog'}).toString()}).response).status,409);
+  console.log('Actual Gateway-authorized restricted-role HTTPS client provisioning/encrypted receipt replay/current configuration and caller substitution rejection passed');
   const recoveryRepository=createPostgresRepository(pool), recoveryHash='d'.repeat(64), recoveryNow=Date.now();
   await recoveryRepository.saveAuthorization({stateHash:recoveryHash,browserBindingHash:'c'.repeat(64),
-    organizationId:org,platformId:'runtime-platform',platformConfigVersion:1,canvasOrigin:canvas.origin,
+    organizationId:org,platformId:'runtime-platform',platformConfigVersion:2,canvasOrigin:canvas.origin,
     clientId:'recovery-client',clientSecretRef:reference,capabilities:['catalog'],scopes:['read'],redirectUri:origin+'/oauth/callback',
     createdAt:recoveryNow,expiresAt:recoveryNow+600000});
-  await recoveryRepository.markAuthorizationPending(org,'runtime-platform',1,recoveryHash);
+  await recoveryRepository.markAuthorizationPending(org,'runtime-platform',2,recoveryHash);
   await recoveryRepository.consumeAuthorizationAttempt(recoveryHash,'c'.repeat(64));
   const recoveryPath='/platforms/runtime-platform/oauth/attempts/';
   const inspectionForm=new URLSearchParams({authorization_id:recoveryHash}).toString();
@@ -300,7 +320,7 @@ try {
   assert.equal(readReceipt.status,200);assert.deepEqual(JSON.parse(readReceipt.body),JSON.parse(recovered.body));
   assert.equal((await pool.query('SELECT actor_id FROM canvas_connector.authorization_recovery_audit WHERE organization_id=$1 AND operation_id=$2',[org,recoveryOperation])).rows[0].actor_id,'actor');
   console.log('Actual public Gateway session/permission to production HTTPS listener/limited HTTP role recovery, immutable actor audit and receipt replay contracts passed');
-  const started = await send(address, { body: new URLSearchParams({ client_id: 'runtime-client', client_secret_ref: reference, capabilities: 'catalog' }).toString() }).response;
+  const started = await send(address, { body:'capabilities=catalog' }).response;
   assert.equal(started.status, 200);
   const authorization = new URL(JSON.parse(started.body).authorizationUrl);
   assert.equal(authorization.origin, canvas.origin);

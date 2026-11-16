@@ -33,8 +33,9 @@ Bootstrap supplies `getPassword({signal})` for the connector database and
 for each other or sent to Canvas or Marty. No environment/file credentials or
 plaintext fallback are loaded here. Agent renewal, file loading and TLS rotation
 remain deployment work. There are no replacement repository, vault, provider,
-HTTP-authentication or outbound-transport hooks. Platform/client-secret provisioning
-remains an owner/operator task.
+HTTP-authentication or outbound-transport hooks. Connector-owned platform and
+[client provisioning APIs](OAUTH_CLIENT_PROVISIONING.md) now provide the operator
+workflow; the production lifecycle requires current stored client configuration.
 
 The separate [agent-file providers](FILE_CREDENTIALS.md) now provide concrete
 POSIX file acquisition for those two interfaces. The runtime itself still loads
