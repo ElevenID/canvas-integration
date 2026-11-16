@@ -53,7 +53,7 @@ await pool.query("INSERT INTO canvas_connector.platforms(organization_id,id,canv
 assert.equal((await repository.getPlatform('adapter-org', 'adapter-platform')).configVersion, 1);
 assert.equal(await repository.getPlatform('foreign', 'adapter-platform'), null);
 const now = Date.now();
-const authorization = { stateHash: 'd'.repeat(64), organizationId: 'adapter-org', platformId: 'adapter-platform',
+const authorization = { browserBindingHash:'e'.repeat(64), stateHash: 'd'.repeat(64), organizationId: 'adapter-org', platformId: 'adapter-platform',
   platformConfigVersion: 1, canvasOrigin: 'https://canvas.example.test', clientId: "client'quoted",
   clientSecretRef: 'vault-client', capabilities: ['catalog'], scopes: ['read'],
   redirectUri: 'https://connector.example.test/oauth/callback', createdAt: now, expiresAt: now + 600000 };
@@ -61,10 +61,12 @@ assert.equal(await repository.saveAuthorization(authorization), true);
 assert.equal(await repository.saveAuthorization(authorization), false);
 assert.equal(await repository.markAuthorizationPending('adapter-org', 'adapter-platform', 2, authorization.stateHash), false);
 assert.equal(await repository.markAuthorizationPending('adapter-org', 'adapter-platform', 1, authorization.stateHash), true);
-const consumed = await repository.consumeAuthorization(authorization.stateHash);
+assert.equal(await repository.consumeAuthorization(authorization.stateHash,now,'f'.repeat(64)),null);
+const consumed = await repository.consumeAuthorization(authorization.stateHash,now,authorization.browserBindingHash);
+assert.equal(consumed.browserBindingHash,authorization.browserBindingHash);
 assert.equal(consumed.clientId, authorization.clientId);
 assert.equal(consumed.expiresAt, authorization.expiresAt);
-assert.equal(await repository.consumeAuthorization(authorization.stateHash), null);
+assert.equal(await repository.consumeAuthorization(authorization.stateHash,now,authorization.browserBindingHash), null);
 const connection = { ...authorization, accessTokenRef: 'vault-access', refreshTokenRef: 'vault-refresh', tokenExpiresAt: now + 3600000 };
 assert.equal(await repository.publishConnection(connection, 2), false);
 assert.equal(await repository.publishConnection(connection, 1), true);
@@ -97,7 +99,7 @@ for (const uncertainCommit of [false, true]) {
     repository: createPostgresRepository(durablePool),
     secretVault: {
       async metadata(tenant, ref) { return tenant === org && ref === 'client-secret-ref'
-        ? { organizationId: org, enabled: true, provider: 'canvas', purpose: 'oauth_client_secret' } : null; },
+        ? { organizationId: org, platformId:'platform', enabled: true, provider: 'canvas', purpose: 'oauth_client_secret' } : null; },
       async get(tenant, ref) { assert.equal(tenant, org); return secrets.get(ref); },
       async put(tenant, metadata, value) {
         assert.equal(tenant, org); const ref = 'vault-' + metadata.purpose; secrets.set(ref, value); return ref;
@@ -109,10 +111,10 @@ for (const uncertainCommit of [false, true]) {
       return { accessToken: 'synthetic-access-token', refreshToken: 'synthetic-refresh-token', expiresInSeconds: 3600 };
     } },
   });
-  const start = await lifecycle.start({ organizationId: org, platformId: 'platform',
+  const start = await lifecycle.start({ browserBinding:Buffer.alloc(32,9).toString('base64url'), organizationId: org, platformId: 'platform',
     clientId: 'client', clientSecretRef: 'client-secret-ref', capabilities: ['catalog'] });
   const state = new URL(start.authorizationUrl).searchParams.get('state');
-  const callback = await lifecycle.callback({ state, code: 'synthetic-code' });
+  const callback = await lifecycle.callback({ browserBinding:Buffer.alloc(32,9).toString('base64url'), state, code: 'synthetic-code' });
   const result = new URL(callback.location);
   if (uncertainCommit) assert.equal(result.searchParams.get('error_code'), 'oauth_connection_reconciliation_required');
   else assert.equal(result.searchParams.get('outcome'), 'connected');
@@ -120,7 +122,7 @@ for (const uncertainCommit of [false, true]) {
   const persisted = await repository.connection(org, 'platform');
   assert.equal(persisted.accessTokenRef, 'vault-oauth_access_token');
   assert.equal(secrets.size, 3, 'committed or uncertain publication must retain both token references');
-  const replay = await lifecycle.callback({ state, code: 'synthetic-code' });
+  const replay = await lifecycle.callback({ browserBinding:Buffer.alloc(32,9).toString('base64url'), state, code: 'synthetic-code' });
   assert.equal(new URL(replay.location).searchParams.get('error_code'), 'oauth_state_invalid');
   assert.equal(exchanges, 1);
 }
@@ -225,7 +227,7 @@ try {
 } finally { await https.close(); }
 console.log('PostgreSQL + encrypted vault + concrete pinned HTTPS revocation passed');
 
-for (const outcome of ['success', 'lost-commit-ack', 'provider-failure', 'configuration-change']) {
+for (const outcome of ['success', 'lost-commit-ack', 'provider-failure', 'configuration-change','lost-stage-ack']) {
   const fixture = await httpsFixture();
   try {
     const organizationId = 'refresh-' + outcome;
@@ -259,10 +261,20 @@ for (const outcome of ['success', 'lost-commit-ack', 'provider-failure', 'config
     const refreshRepository = outcome === 'lost-commit-ack' ? { ...repository,
       async publishRefresh(...args) { await repository.publishRefresh(...args); throw Error('lost acknowledgment'); },
     } : repository;
-    const refreshWorker = createRefreshWorker({ repository: refreshRepository, secretVault: vault,
+    const refreshVault=outcome==='lost-stage-ack'?createEncryptedVault({pool:{async query(sql,values){
+      const result=await pool.query(sql,values);
+      if(sql.includes('FROM canvas_connector.stage_refresh_result')) throw Error('lost stage acknowledgment');
+      return result;
+    }},keyProvider:{async current(){return {id:currentKey,key:keys.get(currentKey)};},async byId(id){return keys.get(id);}}}):vault;
+    const refreshWorker = createRefreshWorker({ repository: refreshRepository, secretVault: refreshVault,
       provider: createCanvasOAuthProvider({ allowedPrivateAddresses: ['127.0.0.1', '::1'], ca: fixture.ca }) });
     assert.equal(await refreshWorker.runOnce(organizationId, 'platform'), outcome === 'success' ? 'published' : 'reconciliation_required');
     assert.equal(calls, 1);
+    if(['lost-stage-ack','configuration-change'].includes(outcome)) {
+      const attempt=(await pool.query('SELECT new_access_token_ref,new_refresh_token_ref FROM canvas_connector.refresh_attempts WHERE organization_id=$1',[organizationId])).rows[0];
+      assert.ok(attempt.new_access_token_ref);assert.equal(attempt.new_refresh_token_ref,refresh);
+      assert.equal(await vault.get(organizationId,attempt.new_access_token_ref),'synthetic-new-access');
+    }
     const current = await repository.connection(organizationId, 'platform');
     assert.equal(current.refreshTokenRef, refresh, 'Canvas refresh response may omit the reusable refresh token');
     if (['success', 'lost-commit-ack'].includes(outcome)) {
@@ -287,3 +299,110 @@ await pool.query("UPDATE canvas_connector.platforms SET enabled=false WHERE orga
 assert.equal(await repository.beginRefreshExchange(preflight.id, preflight.leaseId), false,
   'disablement between claim and exchange must prevent provider work');
 console.log('Refresh revalidates current configuration before starting external exchange');
+
+// Exact attempt custody must survive publication becoming ineligible.
+async function refreshFixture(organizationId) {
+  await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
+    VALUES ($1,'platform','https://canvas.example.test',true) RETURNING id`,[organizationId]);
+  const put=(purpose,value)=>vault.put(organizationId,{platformId:'platform',provider:'canvas',purpose},value);
+  const client=await put('oauth_client_secret','synthetic-stage-client');
+  const access=await put('oauth_access_token','synthetic-stage-old-access');
+  const refresh=await put('oauth_refresh_token','synthetic-stage-old-refresh');
+  await repository.publishConnection({...connection,organizationId,platformId:'platform',clientSecretRef:client,
+    accessTokenRef:access,refreshTokenRef:refresh,tokenExpiresAt:Date.now()+60000},1);
+  const job=await repository.claimRefresh(organizationId,'platform');
+  assert.equal(await repository.beginRefreshExchange(job.id,null),false,'NULL lease cannot begin an exchange');
+  assert.equal(await repository.beginRefreshExchange(job.id,job.leaseId),true);
+  return job;
+}
+const scope=(platformId,purpose)=>({platformId,provider:'canvas',purpose});
+const bundle={accessToken:'synthetic-stage-new-access',refreshToken:'synthetic-stage-new-refresh'};
+for (const outcome of ['disable','disconnect','lease-expired']) {
+  const job=await refreshFixture('stage-'+outcome);
+  if(outcome==='disable') await pool.query('UPDATE canvas_connector.platforms SET enabled=false WHERE organization_id=$1 RETURNING id',[job.organizationId]);
+  if(outcome==='disconnect') assert.equal(await repository.disconnect(job.organizationId,job.platformId),true);
+  if(outcome==='lease-expired') await pool.query("UPDATE canvas_connector.refresh_attempts SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1 RETURNING id",[job.id]);
+  const result=await vault.stageRefreshResult(job,bundle,Date.now()+3600000);
+  assert.equal(await repository.publishRefresh(job.id,job.leaseId),false);
+  assert.equal(await repository.requireRefreshReconciliation(job.id,job.leaseId),true);
+  const row=(await pool.query('SELECT new_access_token_ref,new_refresh_token_ref FROM canvas_connector.refresh_attempts WHERE id=$1',[job.id])).rows[0];
+  assert.equal(row.new_access_token_ref,result.accessTokenRef);assert.equal(row.new_refresh_token_ref,result.refreshTokenRef);
+  assert.equal(await vault.get(job.organizationId,result.accessTokenRef,scope(job.platformId,'oauth_access_token')),bundle.accessToken);
+  assert.equal(await vault.get(job.organizationId,result.refreshTokenRef,scope(job.platformId,'oauth_refresh_token')),bundle.refreshToken);
+  await assert.rejects(vault.stageRefreshResult(job,{...bundle,accessToken:'synthetic-conflicting-stage'},Date.now()+3600000),/connector_vault_unavailable/);
+}
+console.log('Staged ciphertext remains attempt-attributable after disablement, disconnect and lease expiry; conflicting restaging denied');
+{
+  const job=await refreshFixture('stage-atomic-rollback');
+  const before=(await pool.query('SELECT count(*)::text AS count FROM canvas_connector.secrets WHERE organization_id=$1',[job.organizationId])).rows[0].count;
+  await pool.query("ALTER TABLE canvas_connector.secrets ADD CONSTRAINT reject_second_stage_insert CHECK(organization_id<>'stage-atomic-rollback' OR purpose<>'oauth_refresh_token') NOT VALID",[]);
+  try {await assert.rejects(vault.stageRefreshResult(job,bundle,Date.now()+3600000),/connector_vault_unavailable/);}
+  finally {await pool.query('ALTER TABLE canvas_connector.secrets DROP CONSTRAINT reject_second_stage_insert',[]);}
+  const after=(await pool.query('SELECT count(*)::text AS count FROM canvas_connector.secrets WHERE organization_id=$1',[job.organizationId])).rows[0].count;
+  assert.equal(after,before,'second insert failure must roll back first ciphertext too');
+  assert.equal((await pool.query('SELECT (new_access_token_ref IS NULL) AS ok FROM canvas_connector.refresh_attempts WHERE id=$1',[job.id])).rows[0].ok,true);
+}
+{
+  const job=await refreshFixture('stage-lost-ack');let stagedParameters;let providerCalls=0;
+  const unknownVault=createEncryptedVault({pool:{async query(sql,values){
+    const result=await pool.query(sql,values);
+    if(sql.includes('FROM canvas_connector.stage_refresh_result')){stagedParameters=values;throw Error('lost synthetic staging acknowledgment');}
+    return result;
+  }},keyProvider:{async current(){return {id:currentKey,key:keys.get(currentKey)};},async byId(id){return keys.get(id);}}});
+  const worker=createRefreshWorker({repository:{...repository,async claimRefresh(){return job;}},secretVault:unknownVault,
+    provider:{async refresh(){providerCalls++;return {...bundle,expiresInSeconds:3600};}}});
+  // This fixture already started the exchange; drive staging fault directly.
+  await assert.rejects(unknownVault.stageRefreshResult(job,bundle,Date.now()+3600000),/connector_vault_unavailable/);
+  assert.equal(providerCalls,0);
+  const row=(await pool.query('SELECT new_access_token_ref,new_refresh_token_ref FROM canvas_connector.refresh_attempts WHERE id=$1',[job.id])).rows[0];
+  assert.ok(row.new_access_token_ref);assert.ok(row.new_refresh_token_ref);
+  // Exact replay of the same encrypted SQL result is idempotent.
+  const replay=await pool.query('SELECT id FROM canvas_connector.stage_refresh_result($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,to_timestamp($15::float8/1000))',stagedParameters);
+  assert.equal(replay.rows.length,1);
+  assert.equal(await repository.publishRefresh(job.id,null),false,'NULL lease cannot publish staged secrets');
+  assert.equal(await repository.requireRefreshReconciliation(job.id,job.leaseId),true);
+  assert.equal(await worker.runOnce(job.organizationId,job.platformId),'lease_lost');
+  assert.equal(providerCalls,0,'reconciliation may not repeat provider refresh');
+}
+console.log('Staging rollback and committed-but-lost acknowledgment retain exact references; NULL leases and provider replay denied');
+{
+  const job=await refreshFixture('stage-scope');
+  for(const changed of [{...job,platformId:'other-platform'},{...job,organizationId:'foreign-org'},{...job,leaseId:'00000000-0000-4000-8000-000000000001'}]) {
+    await assert.rejects(vault.stageRefreshResult(changed,bundle,Date.now()+3600000),/connector_vault_unavailable/);
+  }
+  await assert.rejects(vault.get(job.organizationId,job.clientSecretRef,scope('other-platform','oauth_client_secret')),/connector_vault_unavailable/);
+  await assert.rejects(vault.get(job.organizationId,job.clientSecretRef,scope(job.platformId,'oauth_refresh_token')),/connector_vault_unavailable/);
+  await assert.rejects(vault.delete(job.organizationId,job.clientSecretRef,scope('other-platform','oauth_client_secret')),/connector_vault_unavailable/);
+  await assert.rejects(vault.delete(job.organizationId,job.clientSecretRef,scope(job.platformId,'oauth_refresh_token')),/connector_vault_unavailable/);
+  assert.notEqual(await vault.metadata(job.organizationId,job.clientSecretRef),null);
+  const staged=await vault.stageRefreshResult(job,{accessToken:bundle.accessToken},Date.now()+3600000);
+  assert.equal(staged.refreshTokenRef,job.refreshTokenRef,'omitted refresh result records old ref explicitly');
+  assert.equal(await repository.publishRefresh(job.id,job.leaseId),true);
+  assert.notEqual(await vault.metadata(job.organizationId,job.accessTokenRef),null,'a crash before cleanup retains old reference');
+  await pool.query('UPDATE canvas_connector.secrets SET enabled=false WHERE organization_id=$1 AND reference=$2 RETURNING reference',[job.organizationId,job.accessTokenRef]);
+  await vault.delete(job.organizationId,job.accessTokenRef,scope(job.platformId,'oauth_access_token'));
+  await vault.delete(job.organizationId,job.accessTokenRef,scope(job.platformId,'oauth_access_token'));
+  assert.equal(await vault.metadata(job.organizationId,job.accessTokenRef),null,'disabled/missing ciphertext cleanup is idempotent');
+}
+console.log('Staging and scoped vault reads/cleanup enforce exact tenant/platform/lease/purpose, retain omitted refresh refs and recover cleanup');
+
+for(const mismatch of ['platform','purpose']) {
+  const job=await refreshFixture('scope-worker-'+mismatch);
+  await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled) VALUES ($1,'other','https://canvas.example.test',true) RETURNING id`,[job.organizationId]);
+  const wrong=await vault.put(job.organizationId,{platformId:mismatch==='platform'?'other':job.platformId,provider:'canvas',purpose:mismatch==='purpose'?'oauth_access_token':'oauth_client_secret'},'synthetic-other-secret');
+  let providerCalls=0;let deletions=0;
+  const guardedVault={...vault,async delete(...args){deletions++;return vault.delete(...args);}};
+  const worker=createRefreshWorker({repository:{...repository,async claimRefresh(){return {...job,clientSecretRef:wrong};}},secretVault:guardedVault,
+    provider:{async refresh(){providerCalls++;throw Error('must not receive wrong secret');}}});
+  assert.equal(await worker.runOnce(job.organizationId,job.platformId),'reconciliation_required');
+  assert.equal(providerCalls,0);assert.equal(deletions,0);
+  await repository.disconnect(job.organizationId,job.platformId);
+  const wrongRevocation=await vault.put(job.organizationId,{platformId:mismatch==='platform'?'other':job.platformId,provider:'canvas',purpose:mismatch==='purpose'?'oauth_client_secret':'oauth_access_token'},'synthetic-wrong-revocation-secret');
+  await pool.query('UPDATE canvas_connector.revocation_jobs SET access_token_ref=$1 WHERE organization_id=$2 RETURNING id',[wrongRevocation,job.organizationId]);
+  const revoker=createRevocationWorker({repository:{...repository,async claimRevocation(){const value=await pool.query(`UPDATE canvas_connector.revocation_jobs SET lease_id=gen_random_uuid(),lease_until=clock_timestamp()+interval '1 minute' WHERE organization_id=$1 RETURNING id,lease_id AS "leaseId",organization_id AS "organizationId",platform_id AS "platformId",canvas_origin AS "canvasOrigin",access_token_ref AS "accessTokenRef",refresh_token_ref AS "refreshTokenRef"`,[job.organizationId]);return value.rows[0];}},secretVault:guardedVault,
+    provider:{async revoke(){providerCalls++;return true;}}});
+  assert.equal(await revoker.runOnce(),'retry');
+  assert.equal(providerCalls,0);assert.equal(deletions,0);
+  assert.notEqual(await vault.metadata(job.organizationId,wrong),null);
+}
+console.log('Refresh/revocation workers never send wrong-platform or wrong-purpose secrets, and perform no deletion');

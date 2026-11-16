@@ -3,7 +3,7 @@ export function createRefreshWorker({ repository, secretVault, provider } = {}) 
   if (typeof globalThis.window !== 'undefined' || ['claimRefresh', 'beginRefreshExchange',
     'requireRefreshReconciliation', 'abandonUnstartedRefresh', 'publishRefresh']
     .some(name => typeof repository?.[name] !== 'function')
-    || ['get', 'put', 'delete'].some(name => typeof secretVault?.[name] !== 'function')
+    || ['get', 'stageRefreshResult', 'delete'].some(name => typeof secretVault?.[name] !== 'function')
     || typeof provider?.refresh !== 'function') throw new Error('invalid_refresh_worker');
   return Object.freeze({
     async runOnce(org, platform) {
@@ -13,8 +13,8 @@ export function createRefreshWorker({ repository, secretVault, provider } = {}) 
       if (!job) return 'idle';
       let started = false;
       try {
-        const clientSecret = await secretVault.get(job.organizationId, job.clientSecretRef);
-        const refreshToken = await secretVault.get(job.organizationId, job.refreshTokenRef);
+        const clientSecret = await secretVault.get(job.organizationId, job.clientSecretRef, {platformId:job.platformId,provider:'canvas',purpose:'oauth_client_secret'});
+        const refreshToken = await secretVault.get(job.organizationId, job.refreshTokenRef, {platformId:job.platformId,provider:'canvas',purpose:'oauth_refresh_token'});
         // Persist before network I/O. A lost acknowledgment leaves the attempt
         // non-reclaimable; do not guess whether a prior exchange happened.
         if (!await repository.beginRefreshExchange(job.id, job.leaseId)) return 'lease_lost';
@@ -26,11 +26,9 @@ export function createRefreshWorker({ repository, secretVault, provider } = {}) 
             || !Number.isSafeInteger(bundle.expiresInSeconds) || bundle.expiresInSeconds < 1
             || bundle.expiresInSeconds > 315360000) throw new Error('invalid_refresh_bundle');
         const expiresAt = exchangeStartedAt + bundle.expiresInSeconds * 1000;
-        const accessRef = await secretVault.put(job.organizationId,
-          { platformId: job.platformId, provider: 'canvas', purpose: 'oauth_access_token' }, bundle.accessToken);
-        const refreshRef = bundle.refreshToken == null ? job.refreshTokenRef : await secretVault.put(job.organizationId,
-          { platformId: job.platformId, provider: 'canvas', purpose: 'oauth_refresh_token' }, bundle.refreshToken);
-        if (!await repository.publishRefresh(job.id, job.leaseId, accessRef, refreshRef, expiresAt)) {
+        const staged=await secretVault.stageRefreshResult(job,bundle,expiresAt);
+        const refreshRef=staged.refreshTokenRef;
+        if (!await repository.publishRefresh(job.id, job.leaseId)) {
           await repository.requireRefreshReconciliation(job.id, job.leaseId);
           return 'reconciliation_required';
         }
@@ -39,8 +37,8 @@ export function createRefreshWorker({ repository, secretVault, provider } = {}) 
         // ciphertext only after definite publication; references remain in the
         // durable attempt for cleanup reconciliation.
         try {
-          await secretVault.delete(job.organizationId, job.accessTokenRef);
-          if (refreshRef !== job.refreshTokenRef) await secretVault.delete(job.organizationId, job.refreshTokenRef);
+          await secretVault.delete(job.organizationId, job.accessTokenRef, {platformId:job.platformId,provider:'canvas',purpose:'oauth_access_token'});
+          if (refreshRef !== job.refreshTokenRef) await secretVault.delete(job.organizationId, job.refreshTokenRef, {platformId:job.platformId,provider:'canvas',purpose:'oauth_refresh_token'});
         } catch { return 'published_cleanup_required'; }
         return 'published';
       } catch {

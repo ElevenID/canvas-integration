@@ -53,6 +53,11 @@ export function createEncryptedVault({ pool, keyProvider } = {}) {
       return Buffer.concat([partial, decipher.final()]);
     } catch { fail(); } finally { key?.fill(0); partial?.fill(0); }
   };
+  const scope = (row, expected) => {
+    if (expected===undefined) return;
+    if (!id(expected?.platformId) || expected.provider!=='canvas' || !purposes.includes(expected.purpose)) fail();
+    if (row && (row.platform_id!==expected.platformId || row.provider!==expected.provider || row.purpose!==expected.purpose)) fail();
+  };
   return Object.freeze({
     async metadata(org, reference) {
       const row = await load(org, reference);
@@ -75,13 +80,35 @@ export function createEncryptedVault({ pool, keyProvider } = {}) {
         encrypted.ciphertext, encrypted.nonce, encrypted.tag]);
       return row.reference;
     },
-    async get(org, reference) {
+    async get(org, reference, expected) {
       const row = await load(org, reference);
+      scope(row,expected);
       let plaintext;
       try {
         plaintext = await decrypt(org, row);
         return new TextDecoder('utf-8', { fatal: true }).decode(plaintext);
       } catch { fail(); } finally { plaintext?.fill(0); }
+    },
+    // Encrypt first, then stage both ciphertexts AND their exact attempt refs
+    // atomically. No plaintext or independent unassociated put is persisted.
+    async stageRefreshResult(job,bundle,expiresAt) {
+      if (!id(job?.id) || !id(job.leaseId) || !id(job.organizationId) || !id(job.platformId)
+          || !Number.isSafeInteger(expiresAt) || expiresAt<=0) fail();
+      const prepare=async(purpose,value)=>{
+        if (typeof value!=='string' || !value.length || value.length>4096 || Buffer.byteLength(value)>16384) fail();
+        const row={reference:randomUUID(),platform_id:job.platformId,provider:'canvas',purpose};
+        const plaintext=Buffer.from(value);
+        try {return {...row,...await encrypt(job.organizationId,row,plaintext),key_id:row.key_id};}
+        finally {plaintext.fill(0);}
+      };
+      const access=await prepare('oauth_access_token',bundle?.accessToken);
+      const refresh=bundle.refreshToken==null?null:await prepare('oauth_refresh_token',bundle.refreshToken);
+      const result=await execute(`SELECT new_access_token_ref AS "accessTokenRef",new_refresh_token_ref AS "refreshTokenRef"
+        FROM canvas_connector.stage_refresh_result($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,to_timestamp($15::float8/1000))`,
+        [job.id,job.leaseId,job.organizationId,job.platformId,access.reference,access.key_id,access.ciphertext,access.nonce,access.tag,
+          refresh?.reference??null,refresh?.key_id??null,refresh?.ciphertext??null,refresh?.nonce??null,refresh?.tag??null,expiresAt]);
+      if (result.rows.length!==1) fail();
+      return Object.freeze(result.rows[0]);
     },
     async rotate(org, reference) {
       const previous = await load(org, reference);
@@ -100,8 +127,16 @@ export function createEncryptedVault({ pool, keyProvider } = {}) {
         return result.rows.length === 1;
       } finally { plaintext?.fill(0); }
     },
-    async delete(org, reference) {
+    async delete(org, reference, expected) {
       if (!id(org) || !id(reference)) fail();
+      if (expected!==undefined) {
+        const row=await load(org,reference);scope(row,expected);
+        if (!row) return;
+        const deleted=await execute('DELETE FROM canvas_connector.secrets WHERE organization_id=$1 AND reference=$2 AND platform_id=$3 AND provider=$4 AND purpose=$5 RETURNING reference',
+          [org,reference,expected.platformId,expected.provider,expected.purpose]);
+        if (deleted.rows.length!==1) fail();
+        return;
+      }
       await execute('DELETE FROM canvas_connector.secrets WHERE organization_id=$1 AND reference=$2 RETURNING reference', [org, reference]);
     },
   });

@@ -48,6 +48,7 @@ CREATE TABLE canvas_connector.secrets (
 
 CREATE TABLE canvas_connector.authorizations (
     state_hash text PRIMARY KEY CHECK (state_hash ~ '^[a-f0-9]{64}$'),
+    browser_binding_hash text NOT NULL CHECK (browser_binding_hash ~ '^[a-f0-9]{64}$'),
     organization_id text NOT NULL,
     platform_id text NOT NULL,
     platform_config_version bigint NOT NULL CHECK (platform_config_version BETWEEN 1 AND 9007199254740991),
@@ -94,10 +95,10 @@ $$;
 
 -- DELETE RETURNING consumes the state atomically across concurrent callbacks.
 -- Expiry comes from the database clock, not an untrusted callback parameter.
-CREATE FUNCTION canvas_connector.consume_authorization(requested_hash text)
+CREATE FUNCTION canvas_connector.consume_authorization(requested_hash text, requested_browser_hash text)
 RETURNS SETOF canvas_connector.authorizations LANGUAGE sql AS $$
     DELETE FROM canvas_connector.authorizations
-     WHERE state_hash = requested_hash AND expires_at > clock_timestamp()
+     WHERE state_hash = requested_hash AND browser_binding_hash=requested_browser_hash AND expires_at > clock_timestamp()
     RETURNING *;
 $$;
 
@@ -269,6 +270,8 @@ CREATE TABLE canvas_connector.refresh_attempts (
     phase text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','exchanging','published','abandoned','reconciliation_required')),
     new_access_token_ref text,
     new_refresh_token_ref text,
+    new_token_expires_at timestamptz,
+    CHECK ((new_access_token_ref IS NULL AND new_refresh_token_ref IS NULL AND new_token_expires_at IS NULL) OR (new_access_token_ref IS NOT NULL AND new_refresh_token_ref IS NOT NULL AND new_token_expires_at IS NOT NULL)),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE UNIQUE INDEX refresh_active_platform ON canvas_connector.refresh_attempts(organization_id,platform_id)
@@ -314,7 +317,7 @@ BEGIN
       WHERE organization_id=attempt.organization_id AND platform_id=attempt.platform_id FOR UPDATE;
     IF NOT FOUND THEN RETURN false; END IF;
     SELECT * INTO attempt FROM canvas_connector.refresh_attempts WHERE id=job FOR UPDATE;
-    IF attempt.lease_id <> lease OR attempt.phase <> 'claimed' OR attempt.lease_until <= clock_timestamp()
+    IF lease IS NULL OR attempt.lease_id <> lease OR attempt.phase <> 'claimed' OR attempt.lease_until <= clock_timestamp()
        OR NOT configuration.enabled OR configuration.archived OR configuration.config_version <> attempt.config_version
        OR connection.revision <> attempt.connection_revision OR connection.status <> 'connected' THEN RETURN false; END IF;
     UPDATE canvas_connector.refresh_attempts SET phase='exchanging' WHERE id=job;
@@ -334,7 +337,54 @@ RETURNS boolean LANGUAGE sql AS $$
     SELECT EXISTS(SELECT 1 FROM changed);
 $$;
 
-CREATE FUNCTION canvas_connector.publish_refresh(job uuid, lease uuid, access_ref text, refresh_ref text, expiry timestamptz)
+-- Custody is independent of publication eligibility. Preserve a completed
+-- external exchange even after disconnect/config change/lease expiry.
+CREATE FUNCTION canvas_connector.stage_refresh_result(job uuid, lease uuid, org text, platform text,
+  access_ref text, access_key text, access_cipher bytea, access_nonce bytea, access_tag bytea,
+  refresh_ref text, refresh_key text, refresh_cipher bytea, refresh_nonce bytea, refresh_tag bytea,
+  expiry timestamptz)
+RETURNS SETOF canvas_connector.refresh_attempts LANGUAGE plpgsql AS $$
+DECLARE attempt canvas_connector.refresh_attempts;
+BEGIN
+    -- Platform-before-attempt order matches publication; FK inserts must never
+    -- wait for a platform row while holding an attempt needed by its owner.
+    PERFORM 1 FROM canvas_connector.platforms WHERE organization_id=org AND id=platform FOR KEY SHARE;
+    IF NOT FOUND THEN RETURN; END IF;
+    SELECT * INTO attempt FROM canvas_connector.refresh_attempts WHERE id=job FOR UPDATE;
+    IF NOT FOUND OR lease IS NULL OR attempt.lease_id<>lease OR attempt.organization_id<>org OR attempt.platform_id<>platform
+       OR attempt.phase NOT IN ('exchanging','reconciliation_required') OR expiry IS NULL OR NOT isfinite(expiry)
+       OR access_ref IS NULL OR access_ref=attempt.access_token_ref THEN RETURN; END IF;
+    IF attempt.new_access_token_ref IS NOT NULL THEN
+        IF attempt.new_access_token_ref<>access_ref
+           OR attempt.new_refresh_token_ref<>coalesce(refresh_ref,attempt.refresh_token_ref)
+           OR attempt.new_token_expires_at<>expiry THEN RETURN; END IF;
+        PERFORM 1 FROM canvas_connector.secrets WHERE organization_id=org AND reference=access_ref
+          AND platform_id=platform AND provider='canvas' AND purpose='oauth_access_token'
+          AND key_id=access_key AND ciphertext=access_cipher AND nonce=access_nonce AND tag=access_tag;
+        IF NOT FOUND THEN RETURN; END IF;
+        IF refresh_ref IS NOT NULL THEN
+            PERFORM 1 FROM canvas_connector.secrets WHERE organization_id=org AND reference=refresh_ref
+              AND platform_id=platform AND provider='canvas' AND purpose='oauth_refresh_token'
+              AND key_id=refresh_key AND ciphertext=refresh_cipher AND nonce=refresh_nonce AND tag=refresh_tag;
+            IF NOT FOUND THEN RETURN; END IF;
+        END IF;
+        RETURN QUERY SELECT * FROM canvas_connector.refresh_attempts WHERE id=job;
+        RETURN;
+    END IF;
+    INSERT INTO canvas_connector.secrets(organization_id,reference,platform_id,provider,purpose,key_id,ciphertext,nonce,tag)
+      VALUES(org,access_ref,platform,'canvas','oauth_access_token',access_key,access_cipher,access_nonce,access_tag);
+    IF refresh_ref IS NOT NULL THEN
+        INSERT INTO canvas_connector.secrets(organization_id,reference,platform_id,provider,purpose,key_id,ciphertext,nonce,tag)
+          VALUES(org,refresh_ref,platform,'canvas','oauth_refresh_token',refresh_key,refresh_cipher,refresh_nonce,refresh_tag);
+    ELSIF refresh_key IS NOT NULL OR refresh_cipher IS NOT NULL OR refresh_nonce IS NOT NULL OR refresh_tag IS NOT NULL THEN
+        RAISE EXCEPTION 'invalid staged refresh result' USING ERRCODE='23514';
+    END IF;
+    RETURN QUERY UPDATE canvas_connector.refresh_attempts SET new_access_token_ref=access_ref,
+      new_refresh_token_ref=coalesce(refresh_ref,attempt.refresh_token_ref),new_token_expires_at=expiry WHERE id=job RETURNING *;
+END;
+$$;
+
+CREATE FUNCTION canvas_connector.publish_refresh(job uuid, lease uuid)
 RETURNS boolean LANGUAGE plpgsql AS $$
 DECLARE attempt canvas_connector.refresh_attempts; configuration canvas_connector.platforms;
         connection canvas_connector.connections;
@@ -348,14 +398,20 @@ BEGIN
       WHERE organization_id=attempt.organization_id AND platform_id=attempt.platform_id FOR UPDATE;
     IF NOT FOUND THEN RETURN false; END IF;
     SELECT * INTO attempt FROM canvas_connector.refresh_attempts WHERE id=job FOR UPDATE;
-    IF attempt.lease_id <> lease OR attempt.phase <> 'exchanging' OR attempt.lease_until <= clock_timestamp()
+    IF lease IS NULL OR attempt.lease_id <> lease OR attempt.phase <> 'exchanging' OR attempt.lease_until <= clock_timestamp()
        OR NOT configuration.enabled OR configuration.archived OR configuration.config_version <> attempt.config_version
        OR connection.revision <> attempt.connection_revision OR connection.status <> 'connected'
-       OR expiry IS NULL OR expiry <= clock_timestamp()
-       OR access_ref IS NULL OR access_ref=connection.access_token_ref OR refresh_ref IS NULL THEN RETURN false; END IF;
-    UPDATE canvas_connector.connections SET access_token_ref=access_ref,refresh_token_ref=refresh_ref,token_expires_at=expiry
+       OR attempt.new_token_expires_at IS NULL OR attempt.new_token_expires_at<=clock_timestamp()
+       OR attempt.new_access_token_ref IS NULL OR attempt.new_refresh_token_ref IS NULL THEN RETURN false; END IF;
+    PERFORM 1 FROM canvas_connector.secrets WHERE organization_id=attempt.organization_id AND platform_id=attempt.platform_id
+      AND reference=attempt.new_access_token_ref AND provider='canvas' AND purpose='oauth_access_token' AND enabled FOR SHARE;
+    IF NOT FOUND THEN RETURN false; END IF;
+    PERFORM 1 FROM canvas_connector.secrets WHERE organization_id=attempt.organization_id AND platform_id=attempt.platform_id
+      AND reference=attempt.new_refresh_token_ref AND provider='canvas' AND purpose='oauth_refresh_token' AND enabled FOR SHARE;
+    IF NOT FOUND THEN RETURN false; END IF;
+    UPDATE canvas_connector.connections SET access_token_ref=attempt.new_access_token_ref,refresh_token_ref=attempt.new_refresh_token_ref,token_expires_at=attempt.new_token_expires_at
       WHERE organization_id=attempt.organization_id AND platform_id=attempt.platform_id;
-    UPDATE canvas_connector.refresh_attempts SET phase='published',new_access_token_ref=access_ref,new_refresh_token_ref=refresh_ref
+    UPDATE canvas_connector.refresh_attempts SET phase='published'
       WHERE id=job;
     RETURN true;
 END;

@@ -79,3 +79,40 @@ that bridge is not a production driver or transport implementation.
 The encrypted vault adapter is documented in ENCRYPTED_VAULT.md. External key-provider
 wiring, administrative operations, driver/deployment wiring,
 refresh/revocation scheduling, reconciliation and deployed acceptance tests remain required.
+
+## Browser-bound authorization consumption
+
+Authorization rows require `browser_binding_hash` in addition to `state_hash`.
+The repository consumes with `(stateHash, now, browserBindingHash)`; PostgreSQL
+uses its own wall clock and atomically deletes only when both hashes match.
+Wrong/missing browser proofs leave the real authorization available. Existing
+pre-binding rows are not compatible and must fail closed; do not add a state-only
+fallback. This candidate schema is not installed in a production database.
+
+## Atomic refresh-result custody
+
+`secretVault.stageRefreshResult(job,bundle,expiresAt)` encrypts token values in
+memory using the external key provider, then one autocommitted
+`stage_refresh_result` SQL call inserts both ciphertext rows and records their
+references/expiry on the exact attempt. Second-row failure rolls back the first
+row and all association changes. A missing rotated refresh token explicitly
+records the old refresh reference as the effective result.
+
+Staging requires the original tenant/platform/attempt/lease and an exchanging or
+reconciliation-required attempt. It deliberately remains possible after lease
+expiry, configuration change or disconnect: these states prevent publication,
+not custody of a result already returned by Canvas. Exact encrypted-result
+replay is idempotent; conflicting restaging cannot replace recorded references.
+Unknown acknowledgment requires rereading the attempt, never another provider
+exchange or guessed ciphertext deletion.
+
+`publish_refresh(job,lease)` accepts no caller replacement references. It uses
+only staged fields, rechecks the current platform/connection/revision/live lease,
+and locks enabled, exact-platform/purpose token rows before publication. All
+phase and staged fields survive reconciliation. Old references remain on the
+attempt for cleanup recovery; deletion follows definite publication only.
+NULL leases cannot begin, stage or publish an exchange.
+
+A crash after Canvas responds but before staging commits is still an unknown
+external outcome. Runtime/operator reconciliation, cleanup scheduling and
+production role/key-provider configuration remain qualification requirements.

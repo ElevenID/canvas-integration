@@ -34,9 +34,8 @@ export function createPostgresRepository(pool) {
     async abandonUnstartedRefresh(id, lease) {
       return (await first('SELECT canvas_connector.abandon_unstarted_refresh($1,$2) AS ok', [id, lease])).ok === true;
     },
-    async publishRefresh(id, lease, access, refresh, expiresAt) {
-      return (await first('SELECT canvas_connector.publish_refresh($1,$2,$3,$4,to_timestamp($5::float8/1000)) AS ok',
-        [id, lease, access, refresh, expiresAt])).ok === true;
+    async publishRefresh(id, lease) {
+      return (await first('SELECT canvas_connector.publish_refresh($1,$2) AS ok',[id,lease])).ok===true;
     },
     async disconnect(org, id) {
       return (await first('SELECT canvas_connector.disconnect($1,$2) AS ok', [org, id])).ok === true;
@@ -60,28 +59,29 @@ export function createPostgresRepository(pool) {
     async saveAuthorization(value) {
       const result = await query(`INSERT INTO canvas_connector.authorizations
         (state_hash,organization_id,platform_id,platform_config_version,canvas_origin,client_id,
-         client_secret_ref,capabilities,scopes,redirect_uri,created_at,expires_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,to_timestamp($11::float8/1000),to_timestamp($12::float8/1000))
+         client_secret_ref,capabilities,scopes,redirect_uri,created_at,expires_at,browser_binding_hash)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,to_timestamp($11::float8/1000),to_timestamp($12::float8/1000),$13)
         ON CONFLICT (state_hash) DO NOTHING RETURNING state_hash`,
       [value.stateHash, value.organizationId, value.platformId, value.platformConfigVersion,
         value.canvasOrigin, value.clientId, value.clientSecretRef, value.capabilities, value.scopes,
-        value.redirectUri, value.createdAt, value.expiresAt]);
+        value.redirectUri, value.createdAt, value.expiresAt, value.browserBindingHash]);
       return result.rows.length === 1;
     },
     async markAuthorizationPending(org, id, version, hash) {
       return (await first('SELECT canvas_connector.mark_authorization_pending($1,$2,$3,$4) AS ok',
         [org, id, version, hash])).ok === true;
     },
-    async consumeAuthorization(hash) {
+    async consumeAuthorization(hash, _now, browserBindingHash) {
+      if (!/^[a-f0-9]{64}$/.test(browserBindingHash ?? '')) return null;
       // pool.query must commit this single statement before resolving. Never
       // pass a transaction-bound client: provider exchange follows this return.
-      return first(`SELECT state_hash AS "stateHash", state_hash AS "authorizationId",
+      return first(`SELECT state_hash AS "stateHash", browser_binding_hash AS "browserBindingHash", state_hash AS "authorizationId",
         organization_id AS "organizationId", platform_id AS "platformId",
         platform_config_version::float8 AS "platformConfigVersion", canvas_origin AS "canvasOrigin",
         client_id AS "clientId", client_secret_ref AS "clientSecretRef", capabilities, scopes,
         redirect_uri AS "redirectUri", (extract(epoch FROM created_at)*1000)::float8 AS "createdAt",
         (extract(epoch FROM expires_at)*1000)::float8 AS "expiresAt"
-        FROM canvas_connector.consume_authorization($1)`, [hash]);
+        FROM canvas_connector.consume_authorization($1,$2)`, [hash,browserBindingHash]);
     },
     async cancelAuthorization(hash) {
       await query('DELETE FROM canvas_connector.authorizations WHERE state_hash=$1 RETURNING state_hash', [hash]);

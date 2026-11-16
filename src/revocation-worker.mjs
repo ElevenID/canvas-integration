@@ -13,7 +13,7 @@ export function createRevocationWorker({ repository, secretVault, provider } = {
       if (!job) return 'idle';
       try {
         if (job.revoked !== true) {
-          const accessToken = await secretVault.get(job.organizationId, job.accessTokenRef);
+          const accessToken = await secretVault.get(job.organizationId, job.accessTokenRef, {platformId:job.platformId,provider:'canvas',purpose:'oauth_access_token'});
           // True means confirmed revocation (including an independently verified
           // already-revoked token), never a transport failure or assumed success.
           if (await provider.revoke({ canvasOrigin: job.canvasOrigin, accessToken }) !== true) {
@@ -23,8 +23,8 @@ export function createRevocationWorker({ repository, secretVault, provider } = {
         }
         // Durable provider confirmation lets a replacement worker resume
         // idempotent vault deletion even after the access token was deleted.
-        await secretVault.delete(job.organizationId, job.accessTokenRef);
-        if (job.refreshTokenRef) await secretVault.delete(job.organizationId, job.refreshTokenRef);
+        await secretVault.delete(job.organizationId, job.accessTokenRef, {platformId:job.platformId,provider:'canvas',purpose:'oauth_access_token'});
+        if (job.refreshTokenRef) await secretVault.delete(job.organizationId, job.refreshTokenRef, {platformId:job.platformId,provider:'canvas',purpose:'oauth_refresh_token'});
         return await repository.finishRevocation(job.id, job.leaseId) ? 'completed' : 'lease_lost';
       } catch {
         try { return await repository.retryRevocation(job.id, job.leaseId) ? 'retry' : 'lease_lost'; }

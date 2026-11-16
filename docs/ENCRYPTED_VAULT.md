@@ -46,3 +46,19 @@ The PostgreSQL contract runner tests encryption round trips, distinct ciphertext
 for repeated plaintext, tenant isolation, authenticated metadata/ciphertext
 tampering, disablement, deletion, missing keys and key rotation followed by old
 key retirement, using synthetic external key-provider fixtures only.
+
+## Scoped worker access and refresh staging
+
+Workers pass `{platformId,provider:'canvas',purpose}` to `get` and `delete`.
+The vault checks that context against the same row it authenticates/decrypts.
+Deletion predicates repeat the exact context; a missing row is idempotent and a
+disabled row can be cleaned after durable revocation confirmation. Wrong-platform
+or wrong-purpose rows cannot be decrypted, sent to Canvas or deleted by workers.
+
+Refresh workers use `stageRefreshResult`, rather than independent `put` calls.
+Ciphertext inserts and immutable attempt association commit atomically as
+described in POSTGRES_STORAGE.md. No plaintext or encryption key is passed to
+PostgreSQL. Lost acknowledgment preserves exact attempt-associated references;
+publication consumes those staged references under current fences. Ordinary
+`put` and initial-authorization publication retain their separately documented
+uncertain-outcome/reconciliation limits; this does not qualify a deployment.

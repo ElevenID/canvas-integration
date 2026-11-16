@@ -39,16 +39,19 @@ def main():
         sql((ROOT / 'test/postgres-storage.sql').read_text(encoding='utf-8'))
         subprocess.run(['node', str(ROOT / 'test/postgres-repository-contract.mjs'), name], check=True)
         sql("""INSERT INTO canvas_connector.authorizations
-            (state_hash,organization_id,platform_id,platform_config_version,canvas_origin,
+            (state_hash,browser_binding_hash,organization_id,platform_id,platform_config_version,canvas_origin,
              client_id,client_secret_ref,capabilities,scopes,redirect_uri,expires_at)
-            VALUES (repeat('c',64),'org-one','platform-one',2,'https://canvas.example.test',
+            VALUES (repeat('c',64),repeat('e',64),'org-one','platform-one',2,'https://canvas.example.test',
             'client','vault-client',ARRAY['catalog'],ARRAY['read'],
             'https://connector.example.test/oauth/callback',clock_timestamp()+interval '5 minutes');""")
         with ThreadPoolExecutor(max_workers=8) as executor:
             counts = list(executor.map(lambda _: sql(
-                "SELECT count(*) FROM canvas_connector.consume_authorization(repeat('c',64));"), range(8)))
+                "SELECT count(*) FROM canvas_connector.consume_authorization(repeat('c',64),repeat('e',64));"), range(8)))
         if sorted(counts) != ['0'] * 7 + ['1']:
             raise AssertionError('concurrent authorization consumption was not exactly once')
+        # Prior fault scenarios intentionally retain retryable cleanup jobs.
+        # Preserve them, but isolate the single available job for this census.
+        sql("UPDATE canvas_connector.revocation_jobs SET available_at=clock_timestamp()+interval '1 day' WHERE completed_at IS NULL;")
         sql("""INSERT INTO canvas_connector.revocation_jobs
             (organization_id,platform_id,canvas_origin,access_token_ref)
             VALUES ('org-one','platform-one','https://canvas.example.test','concurrent-vault-ref');""")

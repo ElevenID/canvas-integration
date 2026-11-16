@@ -3,24 +3,24 @@
 INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
 VALUES ('org-one','platform-one','https://canvas.example.test',true);
 INSERT INTO canvas_connector.authorizations
-(state_hash,organization_id,platform_id,platform_config_version,canvas_origin,client_id,
+(state_hash,browser_binding_hash,organization_id,platform_id,platform_config_version,canvas_origin,client_id,
  client_secret_ref,capabilities,scopes,redirect_uri,expires_at)
-VALUES (repeat('a',64),'org-one','platform-one',1,'https://canvas.example.test','client',
+VALUES (repeat('a',64),repeat('e',64),'org-one','platform-one',1,'https://canvas.example.test','client',
  'vault-client',ARRAY['catalog'],ARRAY['read'],'https://connector.example.test/oauth/callback',clock_timestamp()+interval '5 minutes');
 DO $$ BEGIN
-    IF (SELECT count(*) FROM canvas_connector.consume_authorization(repeat('a',64))) <> 1 THEN
+    IF (SELECT count(*) FROM canvas_connector.consume_authorization(repeat('a',64),repeat('e',64))) <> 1 THEN
         RAISE EXCEPTION 'fresh authorization not consumed'; END IF;
-    IF (SELECT count(*) FROM canvas_connector.consume_authorization(repeat('a',64))) <> 0 THEN
+    IF (SELECT count(*) FROM canvas_connector.consume_authorization(repeat('a',64),repeat('e',64))) <> 0 THEN
         RAISE EXCEPTION 'authorization replay accepted'; END IF;
 END $$;
 INSERT INTO canvas_connector.authorizations
-(state_hash,organization_id,platform_id,platform_config_version,canvas_origin,client_id,
+(state_hash,browser_binding_hash,organization_id,platform_id,platform_config_version,canvas_origin,client_id,
  client_secret_ref,capabilities,scopes,redirect_uri,created_at,expires_at)
-VALUES (repeat('b',64),'org-one','platform-one',1,'https://canvas.example.test','client',
+VALUES (repeat('b',64),repeat('e',64),'org-one','platform-one',1,'https://canvas.example.test','client',
  'vault-client',ARRAY['catalog'],ARRAY['read'],'https://connector.example.test/oauth/callback',
  clock_timestamp()-interval '6 minutes',clock_timestamp()-interval '1 minute');
 DO $$ BEGIN
-    IF (SELECT count(*) FROM canvas_connector.consume_authorization(repeat('b',64))) <> 0 THEN
+    IF (SELECT count(*) FROM canvas_connector.consume_authorization(repeat('b',64),repeat('e',64))) <> 0 THEN
         RAISE EXCEPTION 'expired authorization accepted'; END IF;
 END $$;
 INSERT INTO canvas_connector.connections
