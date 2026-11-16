@@ -8,8 +8,9 @@ import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
 import { createLtiLaunchRepository } from '../src/lti-launch-repository.mjs';
 import { createLtiLaunchLifecycle } from '../src/lti-launch-lifecycle.mjs';
 import { createLtiLaunchHandler } from '../src/lti-launch-http.mjs';
+import { runLtiBrowserContract } from './lti-browser-runner.mjs';
 
-const [container, metadataPath] = process.argv.slice(2);
+const [container, metadataPath, browserModule] = process.argv.slice(2);
 if (!/^canvas-lti-state-[a-f0-9]{32}$/.test(container) || !metadataPath) throw Error('owned_fixture_required');
 const run = promisify(execFile), cap = randomBytes(32).toString('hex');
 const quote = value => typeof value === 'number' ? String(value) : "'" + String(value).replaceAll("'", "''") + "'";
@@ -97,9 +98,11 @@ try {
     res.writeHead(404);res.end();
   })().catch(()=>{res.writeHead(500);res.end();});});
   const completion=new Promise(resolve=>{finish=resolve;});
-  await writeFile(metadataPath,JSON.stringify({canvasOrigin:canvas.origin,connectorOrigin,registrationId,base,cap}));
+  const info={canvasOrigin:canvas.origin,connectorOrigin,registrationId,base,cap};
+  await writeFile(metadataPath,JSON.stringify(info));
   console.log('Owned LTI browser fixture ready; metadata stored outside repository');
-  await completion;
+  if(browserModule) await runLtiBrowserContract(browserModule,info);
+  else await completion;
 } finally {
   await Promise.allSettled([canvas.close(),connector.close(),evil.close()]);
   await unlink(metadataPath).catch(()=>{});

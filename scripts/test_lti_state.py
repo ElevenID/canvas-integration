@@ -10,6 +10,7 @@ import subprocess
 import time
 import uuid
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229'
@@ -195,6 +196,12 @@ def main():
         subprocess.run(['node', str(ROOT / 'test/lti-registration-admin-contract.mjs'), name], check=True, cwd=ROOT)
         if len(sys.argv)==3 and sys.argv[1]=='--browser-fixture':
             subprocess.run(['node',str(ROOT/'test/lti-browser-fixture.mjs'),name,sys.argv[2]],check=True,cwd=ROOT)
+        elif len(sys.argv)==3 and sys.argv[1]=='--browser-tests':
+            with tempfile.TemporaryDirectory(prefix='canvas-lti-browser-') as browser_directory:
+                subprocess.run(['node',str(ROOT/'test/lti-browser-fixture.mjs'),name,
+                    str(Path(browser_directory)/'fixture.json'),sys.argv[2]],check=True,cwd=ROOT,timeout=90)
+        elif len(sys.argv)!=1:
+            raise RuntimeError('unsupported LTI contract arguments')
         print('LTI PostgreSQL16 state, 8-way receipt replay, browser/token fences, ABA, rollback and least-privilege contracts passed')
     finally:
         subprocess.run(['docker', 'rm', '--force', name], check=True)

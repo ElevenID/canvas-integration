@@ -4,7 +4,7 @@ This branch implements connector-owned protocol state and inbound LTI
 login/launch/confirmation/resource handlers and registration administration.
 The standalone HTTPS runtime and CLI compose these adapters only when an explicit
 `lti` configuration object is present. Omission preserves disabled LTI dispatch.
-The draft still requires exact-candidate CI, independent review of runtime
+The draft still requires exact-candidate CI and independent review of runtime
 composition and automated browser CI before merging. Canonical Gateway learner association and
 deployed end-to-end qualification remain full-goal requirements.
 
@@ -126,6 +126,18 @@ at the test edge; browser certificates are synthetic and ignored by the isolated
 browser context, while the Node provider validates its peer CA. Database access
 still uses the test-only docker/psql adapter. These tests do not qualify the
 production TLS database driver, real Canvas, Gateway or OB3-wallet deployment.
+
+The `Connector LTI Chromium protocol` CI job installs the separate, locked
+Playwright1.59.1 test toolchain in the runner's temporary directory, installs its
+matching Chromium, and invokes `scripts/test_lti_state.py --browser-tests` with
+that module's absolute path. Tooling does not enter the production package or
+dependency graph. The fixture runs all nine scenarios in fresh isolated contexts
+and closes its browser, HTTPS peers and owned PostgreSQL fixture on completion.
+The local automated runner passed all nine with Chromium147.0.7727.15; the earlier
+interactive fixture also passed with Chromium157.0.4341.60. Linux CI and the
+standalone CLI are qualified only by their exact completed CI runs.
+
+The test runner follows the official [Playwright library lifecycle](https://playwright.dev/docs/library).
 
 References: [Canvas launch/storage flow](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.lti_launch_overview),
 [Canvas postMessage API](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.lti_window_post_message),
