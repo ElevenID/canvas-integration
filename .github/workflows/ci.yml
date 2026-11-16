@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
+      - name: Install locked connector PostgreSQL driver
+        run: npm ci --ignore-scripts --omit=optional --no-audit --no-fund
       - name: Install isolated pinned browser tooling
         shell: bash
         run: |
