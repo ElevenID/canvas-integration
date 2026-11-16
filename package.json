@@ -34,6 +34,16 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/canvas-oauth-provider.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./oauth-callback-http": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/oauth-callback-http.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./oauth-browser-binding": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/oauth-browser-binding.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {

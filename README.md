@@ -25,7 +25,7 @@ from the original in-core provider.
 
 The server-only Canvas OAuth modules now provide a service-level authorization
 code flow and pinned token exchange. They hash and consume one-time state,
-bind callbacks to a fixed connector URI and platform configuration version,
+bind callbacks to the initiating browser, a fixed connector URI and platform configuration version,
 and store client/access/refresh secrets only through an injected
 connector-owned vault adapter. See `docs/OAUTH_PROVIDER.md`.
 
@@ -92,7 +92,7 @@ const platforms = await client.execute('listCanvasPlatforms');
 
 Management operations require explicitly replacing `allowedOperations` with
 reviewed operation names. Creates additionally require a caller-persisted
-`idempotencyKey` (16–128 safe characters), reused for the same logical request.
+`idempotencyKey` (16â€“128 safe characters), reused for the same logical request.
 There are **no automatic write retries**. A network failure can leave the result
 unknown: reconcile through a read before retrying. Header preservation is
 covered here; actual Gateway idempotency remains an integration acceptance gate.

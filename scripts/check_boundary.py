@@ -11,6 +11,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 IMPORTS = {
+    "src/oauth-callback-http.mjs": {"./oauth-browser-binding.mjs"},
+    "src/oauth-browser-binding.mjs": {"node:crypto"},
     "src/operations.mjs": set(),
     "src/browser-denied.mjs": set(),
     "src/gateway-client.mjs": {"node:https", "./operations.mjs"},
@@ -19,7 +21,7 @@ IMPORTS = {
     "src/canvas-rest-contract.mjs": set(),
     "src/canvas-rest-network.mjs": {"node:dns/promises", "node:net", "./canvas-rest-contract.mjs"},
     "src/canvas-rest-reader.mjs": {"node:https", "./canvas-rest-contract.mjs", "./canvas-rest-network.mjs"},
-    "src/canvas-oauth.mjs": {"node:crypto", "./canvas-rest-network.mjs"},
+    "src/canvas-oauth.mjs": {"node:crypto", "./canvas-rest-network.mjs", "./oauth-browser-binding.mjs"},
     "src/canvas-oauth-provider.mjs": {"node:https", "./canvas-rest-network.mjs"},
 }
 IMPORT = re.compile(r"^import\s+[^;]+?\s+from\s+['\"]([^'\"]+)['\"];", re.MULTILINE)
@@ -59,7 +61,9 @@ def audit(root: Path) -> list[str]:
     expected = {".": "./src/gateway-client.mjs", "./configuration": "./src/configuration.mjs",
                 "./canvas-rest": "./src/canvas-rest-reader.mjs",
                 "./canvas-oauth": "./src/canvas-oauth.mjs",
-                "./canvas-oauth-provider": "./src/canvas-oauth-provider.mjs"}
+                "./canvas-oauth-provider": "./src/canvas-oauth-provider.mjs",
+                "./oauth-callback-http": "./src/oauth-callback-http.mjs",
+                "./oauth-browser-binding": "./src/oauth-browser-binding.mjs"}
     if set(package.get("exports", {})) != set(expected):
         errors.append("unexpected package export")
     for name, target in expected.items():
@@ -87,7 +91,7 @@ def audit(root: Path) -> list[str]:
             errors.append("Canvas OAuth transport invariant missing")
     lifecycle = (root / "src/canvas-oauth.mjs").read_text()
     for invariant in ("createHash", "stateHash: stateHash(state)", "repository.consumeAuthorization(stateHash(input.state)",
-                      "cancelAuthorization", "clientSecretRef", "accessTokenRef",
+                      "browserBindingHash", "matchesOAuthBrowserBindingHash", "cancelAuthorization", "clientSecretRef", "accessTokenRef",
                       "publishConnection", "completionLocation"):
         if invariant not in lifecycle:
             errors.append("Canvas OAuth lifecycle invariant missing")
@@ -106,4 +110,4 @@ if __name__ == "__main__":
     if violations:
         print("Boundary check failed:\n" + "\n".join(violations), file=sys.stderr)
         sys.exit(1)
-    print("Boundary check passed: ten runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")
+    print("Boundary check passed: reviewed runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")
