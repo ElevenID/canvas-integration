@@ -47,7 +47,7 @@ Use Node.js 22.16 or later, Python 3 and OpenSSL. No npm dependencies, Marty
 checkout, cloud services or real credentials are needed.
 
 ```sh
-npm ci --ignore-scripts --offline --no-audit --no-fund
+npm ci --ignore-scripts --omit=optional --no-audit --no-fund
 npm run check
 ```
 
@@ -92,7 +92,7 @@ const platforms = await client.execute('listCanvasPlatforms');
 
 Management operations require explicitly replacing `allowedOperations` with
 reviewed operation names. Creates additionally require a caller-persisted
-`idempotencyKey` (16â€“128 safe characters), reused for the same logical request.
+`idempotencyKey` (16Ã¢â‚¬â€œ128 safe characters), reused for the same logical request.
 There are **no automatic write retries**. A network failure can leave the result
 unknown: reconcile through a read before retrying. Header preservation is
 covered here; actual Gateway idempotency remains an integration acceptance gate.
@@ -103,3 +103,5 @@ security boundaries. Do not use `integrations:write` for the normal reader.
 
 See `docs/BOUNDARY.md` for restrictions, migration gates and unverified work.
 Source provenance is in `NOTICE.md`; licensing is in `LICENSE`.
+
+The server-only `./postgres-pool` adapter supplies verified-TLS, bounded autocommit transport for the connector database. See [PostgreSQL driver](docs/POSTGRES_DRIVER.md) for explicit credential wiring, failure semantics and actual PostgreSQL/OpenBao/vault qualification.

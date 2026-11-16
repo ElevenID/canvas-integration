@@ -40,7 +40,7 @@ Marty's `DATABASE_URL`, Redis, service keys or signer authority. The Canvas
 reader takes explicit server-side configuration; it does not read inherited
 service credentials from the environment.
 
-The package has no runtime or development dependencies. CI verifies its runtime
+The only direct runtime dependencies are exact-pinned `pg@8.23.1` and `pg-pool@3.14.0`; the complete transitive registry/integrity graph is locked and checked. Optional transports and lifecycle scripts are omitted during installation. There are no development dependencies. CI verifies its runtime
 file/import inventory, server-only exports, lockfile and Gateway, Canvas REST and OAuth transport invariants.
 These checks are regression guards, not a sandbox against malicious source code.
 They require review and must be protected by repository rules before release.

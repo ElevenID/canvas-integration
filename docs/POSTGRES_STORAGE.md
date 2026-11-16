@@ -66,7 +66,7 @@ numbers and text arrays). Never supply a transaction-bound client: consumption
 must commit before the lifecycle starts the provider exchange. There is no
 in-memory, environment-based or plaintext fallback. Configure the driver pool
 with verified TLS, connection/query deadlines and least-privilege connector
-credentials. This module deliberately does not instantiate a database driver.
+credentials. The repository does not instantiate a driver; use the explicit server-only adapter documented in [POSTGRES_DRIVER.md](POSTGRES_DRIVER.md).
 
 Publication errors remain exceptions with fixed redacted messages, including
 uncertain commit acknowledgments. Only explicit zero-row conflicts return
@@ -77,7 +77,7 @@ execute the actual parameterized statements through a test-only psql bridge;
 that bridge is not a production driver or transport implementation.
 
 The encrypted vault adapter is documented in ENCRYPTED_VAULT.md. External key-provider
-wiring, administrative operations, driver/deployment wiring,
+wiring, administrative operations, deployment wiring,
 refresh/revocation scheduling, reconciliation and deployed acceptance tests remain required.
 
 ## Browser-bound authorization consumption
