@@ -76,16 +76,17 @@ def main():
             key('kv','put','-mount=connector-kv','-cas=0','canvas-envelope/current','id=canvas-key-one')
             key('policy','write','canvas-key-reader','-',input='path "connector-kv/data/canvas-envelope/current" { capabilities=["read"] }\npath "connector-kv/data/canvas-envelope/keys/*" { capabilities=["read"] }\n')
             token=json.loads(key('token','create','-policy=canvas-key-reader','-no-default-policy','-format=json'))['auth']['client_token']
+            file_token=json.loads(key('token','create','-policy=canvas-key-reader','-no-default-policy','-format=json'))['auth']['client_token'] if os.name!='nt' else None
             pgport=docker('port',pg,'5432/tcp').splitlines()[0]
             baoport=docker('port',bao,'8200/tcp').splitlines()[0]
             if not all(v.startswith('127.0.0.1:') for v in [pgport,baoport]):raise AssertionError('fixture exposure must be loopback')
             fixture=path/'synthetic-fixture.json'
             fixture.write_text(json.dumps({'port':int(pgport.rsplit(':',1)[1]),'ca':(path/'server.crt').read_text(),
                 'untrustedCa':(path/'untrusted.crt').read_text(),'baoOrigin':'https://'+baoport,
-                'baoCa':docker('exec',bao,'cat','/tmp/canvas-tls/vault-ca.pem'),'baoToken':token}))
+                'baoCa':docker('exec',bao,'cat','/tmp/canvas-tls/vault-ca.pem'),'baoToken':token,'baoFileToken':file_token}))
             def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage],check=True,cwd=ROOT,timeout=30)
             node('initial')
-            subprocess.run(['node',str(ROOT/'test/connector-oauth-runtime-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=60)
+            subprocess.run(['node',str(ROOT/'test/connector-oauth-runtime-contract.mjs'),str(fixture),pg,bao],check=True,cwd=ROOT,env=env,timeout=60)
             subprocess.run(['node',str(ROOT/'test/observation-outbox-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=60)
             subprocess.run(['node',str(ROOT/'test/rest-capture-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=60)
             key('kv','put','-mount=connector-kv','-cas=1','canvas-envelope/current','id=canvas-key-two')

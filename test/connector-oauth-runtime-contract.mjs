@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, rename } from 'node:fs/promises';
+import { dirname, basename, resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { request } from 'node:https';
 import { setImmediate } from 'node:timers/promises';
@@ -9,16 +11,37 @@ import { createOpenBaoKeyProvider } from '../src/openbao-key-provider.mjs';
 import { createEncryptedVault } from '../src/encrypted-vault.mjs';
 import { createOAuthHttpRateLimiter } from '../src/oauth-http-rate-limiter.mjs';
 import { createConnectorOAuthRuntime } from '../src/connector-oauth-runtime.mjs';
+import { createConnectorDatabasePasswordFile, createConnectorOpenBaoTokenFile } from '../src/file-credentials.mjs';
 import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
-const file = process.argv[2], container = process.argv[3];
+const file = process.argv[2], container = process.argv[3], baoContainer = process.argv[4];
 assert.match(file ?? '', /canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);
 assert.match(container ?? '', /^canvas-pg-driver-[a-f0-9]{32}$/);
+assert.match(baoContainer ?? '', /^canvas-pg-key-[a-f0-9]{32}$/);
+assert.equal(container.slice('canvas-pg-driver-'.length), baoContainer.slice('canvas-pg-key-'.length));
 const f = JSON.parse(await readFile(file, 'utf8'));
+const directory = dirname(resolve(file));
+assert.equal(dirname(directory), resolve(tmpdir())); assert.match(basename(directory), /^canvas-driver-contract-/);
+const passwordFile = join(directory, 'agent-database-password'), httpPasswordFile = join(directory, 'agent-http-password');
+const tokenFile = join(directory, 'agent-openbao-token');
+const fileCustody = process.platform !== 'win32';
+async function replacePrivate(path, value) {
+  await writeFile(path + '.next', value + '\n', { mode: 0o600 }); await rename(path + '.next', path);
+}
+if (fileCustody) {
+  assert.equal(typeof f.baoFileToken, 'string');
+  await replacePrivate(passwordFile, 'synthetic-driver-runtime');
+  await replacePrivate(httpPasswordFile, 'synthetic-oauth-http-password');
+  await replacePrivate(tokenFile, f.baoFileToken);
+}
+// Windows does not qualify POSIX agent files. Its existing physical fixture
+// retains explicit synthetic providers; production file providers never fall back.
 const database = { host: 'localhost', port: f.port, database: 'canvas_driver_test', user: 'canvas_runtime', ca: f.ca,
-  credentialProvider: { getPassword: async () => 'synthetic-driver-runtime' }, maxConnections: 16,
+  credentialProvider: fileCustody ? createConnectorDatabasePasswordFile({ path: passwordFile })
+    : { getPassword: async () => 'synthetic-driver-runtime' }, maxConnections: 16,
   connectTimeoutMs: 1000, queryTimeoutMs: 5000 };
 const keyCustody = { openbaoOrigin: f.baoOrigin, mount: 'connector-kv', keyPath: 'canvas-envelope', keyNamespace: 'canvas',
-  ca: f.baoCa, tokenProvider: { getToken: async () => f.baoToken } };
+  ca: f.baoCa, tokenProvider: fileCustody ? createConnectorOpenBaoTokenFile({ path: tokenFile })
+    : { getToken: async () => f.baoToken } };
 const pool = createConnectorPostgresPool(database);
 const vault = createEncryptedVault({ pool, keyProvider: createOpenBaoKeyProvider(keyCustody) });
 const owner = sql => execFileSync('docker', ['exec', '-i', container, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1',
@@ -71,7 +94,11 @@ try {
   // Real concurrent callers, including a separate role/pool, share one budget.
   owner("UPDATE canvas_connector.oauth_http_limit SET request_limit=3,window_ms=60000,hits=0,window_started_at=clock_timestamp();");
   const limiter = createOAuthHttpRateLimiter(pool);
-  const admitted = await Promise.all(Array.from({ length: 8 }, () => limiter.consume('ignored-client-address')));
+  // Keep cold connection acquisitions within the file provider's four-read bound.
+  const admitted = [];
+  for (let batch = 0; batch < 2; batch++) {
+    admitted.push(...await Promise.all(Array.from({ length: 4 }, () => limiter.consume('ignored-client-address'))));
+  }
   assert.equal(admitted.filter(Boolean).length, 3);
   assert.equal((await pool.query('SELECT hits FROM canvas_connector.oauth_http_limit')).rows[0].hits, 3);
   owner("CREATE ROLE canvas_counter LOGIN PASSWORD 'synthetic-counter-password'; GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_counter; GRANT USAGE ON SCHEMA canvas_connector TO canvas_counter; GRANT SELECT ON canvas_connector.oauth_http_limit TO canvas_counter; GRANT UPDATE(hits,window_started_at) ON canvas_connector.oauth_http_limit TO canvas_counter; GRANT EXECUTE ON FUNCTION canvas_connector.consume_oauth_http_limit() TO canvas_counter;");
@@ -103,7 +130,8 @@ try {
       canvas_connector.mark_authorization_pending(text,text,bigint,text),
       canvas_connector.check_connection_configuration() TO canvas_oauth_http;`);
   const httpDatabase = { ...database, user: 'canvas_oauth_http',
-    credentialProvider: { getPassword: async () => 'synthetic-oauth-http-password' } };
+    credentialProvider: fileCustody ? createConnectorDatabasePasswordFile({ path: httpPasswordFile })
+      : { getPassword: async () => 'synthetic-oauth-http-password' } };
   const missingLockPrivilege = await runtime({ database: httpDatabase });
   await assert.rejects(missingLockPrivilege.listen(), { message: 'connector_oauth_runtime_unavailable' });
   // UPDATE(id) permits the required row locks. The immutable identity trigger
@@ -155,6 +183,20 @@ try {
   owner("UPDATE canvas_connector.oauth_http_limit SET request_limit=1,hits=1,window_started_at=clock_timestamp();");
   assert.equal((await send(secondAddress).response).status, 429); assert.equal(gateway.seen.length, before);
   await second.close();
+  if (fileCustody) {
+    owner("ALTER ROLE canvas_oauth_http PASSWORD 'synthetic-oauth-http-rotated';");
+    await replacePrivate(httpPasswordFile, 'synthetic-oauth-http-rotated');
+    const rotated = await runtime(); await rotated.listen(); await rotated.close();
+    await replacePrivate(httpPasswordFile, 'synthetic-oauth-http-password');
+    const stale = await runtime(); await assert.rejects(stale.listen(), { message: 'connector_oauth_runtime_unavailable' });
+    await replacePrivate(httpPasswordFile, 'synthetic-oauth-http-rotated');
+    execFileSync('docker', ['exec', '-e', 'BAO_ADDR=https://127.0.0.1:8200', '-e', 'BAO_CACERT=/tmp/canvas-tls/vault-ca.pem',
+      '-e', 'BAO_TOKEN=synthetic-driver-key-bootstrap', baoContainer, 'bao', 'token', 'revoke', f.baoFileToken], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const revokedAgent = await runtime(); await assert.rejects(revokedAgent.listen(), { message: 'connector_oauth_runtime_unavailable' });
+    await replacePrivate(tokenFile, f.baoToken);
+    const renewed = await runtime(); await renewed.listen(); await renewed.close();
+    console.log('Actual POSIX agent-file custody and PostgreSQL password/OpenBao token rotation contracts passed');
+  } else console.log('POSIX agent-file rotation not qualified on this Windows host; explicit synthetic providers used in the physical fixture');
   const denied = await runtime({ keyCustody: { ...keyCustody, tokenProvider: { getToken: async () => 'synthetic-invalid-bao-token' } } });
   await assert.rejects(denied.listen(), { message: 'connector_oauth_runtime_unavailable' });
   const badPassword = await runtime({ database: { ...database, credentialProvider: { getPassword: async () => 'synthetic-wrong-password' } } });
