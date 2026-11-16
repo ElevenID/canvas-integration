@@ -55,6 +55,20 @@ test('unknown fields, raw credentials, missing versions and reused secret paths 
   }
 });
 
+test('explicit LTI policy has a separate CA file and no replacement authority or transport fields', { skip: !posix },async t=>{
+  const f=await fixture(t);
+  f.configuration.lti={selfManagedOriginAllowlist:['https://self-managed.example'],allowedPrivateAddresses:['127.0.0.1'],
+    caFile:f.files.ca,timeoutMs:5000};
+  await writeFile(f.path,JSON.stringify(f.configuration));
+  const loaded=await loadConnectorOAuthConfiguration({path:f.path});
+  assert.deepEqual(loaded.lti,{selfManagedOriginAllowlist:['https://self-managed.example'],allowedPrivateAddresses:['127.0.0.1'],ca:'synthetic CA\n',timeoutMs:5000});
+  assert.deepEqual(loaded.canvas,{});
+  for(const change of [v=>v.lti=null,v=>v.lti=false,v=>{v.lti.ca='inline';},v=>{v.lti.verify=()=>true;v.lti.gatewayKey='forbidden';}]) {
+    const value=structuredClone(f.configuration);change(value);await writeFile(f.path,JSON.stringify(value));
+    await assert.rejects(loadConnectorOAuthConfiguration({path:f.path}),denied);
+  }
+});
+
 test('duplicate and escaped keys, deep nesting, prototype fields and malformed JSON are rejected', { skip: !posix }, async t => {
   const f = await fixture(t); const json = JSON.stringify(f.configuration);
   for (const text of [json.replace('"schemaVersion":1', '"schemaVersion":1,"schemaVersion":1'),

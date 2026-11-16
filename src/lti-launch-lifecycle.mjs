@@ -43,6 +43,10 @@ export function createLtiLaunchLifecycle(configuration) {
   const origins = policy.selfManagedOriginAllowlist ?? [];
   if (!Array.isArray(origins) || origins.length > 32) fail('invalid_lti_lifecycle');
   const allowlist = Object.freeze(origins.map(value => canvasOrigin(value)));
+  if (policy.ca !== undefined && (typeof policy.ca !== 'string' || policy.ca.length > 65536 ||
+      !policy.ca.includes('-----BEGIN CERTIFICATE-----') || /PRIVATE KEY/.test(policy.ca))) fail('invalid_lti_lifecycle');
+  if (policy.timeoutMs !== undefined && (!Number.isSafeInteger(policy.timeoutMs) ||
+      policy.timeoutMs < 50 || policy.timeoutMs > 120000)) fail('invalid_lti_lifecycle');
   const network = Object.freeze({ allowedPrivateAddresses: approvedPrivateAddresses(policy.allowedPrivateAddresses),
     ca: policy.ca, timeoutMs: policy.timeoutMs });
   const resourceUrl = id => `${origin.origin}/lti/registrations/${id}/resource`;

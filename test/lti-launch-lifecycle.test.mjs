@@ -23,6 +23,13 @@ test('lifecycle rejects caller credentials, authority and alternate verification
     assert.throws(() => createLtiLaunchLifecycle({ repository: repository(), publicOrigin: origin }), { message: 'invalid_lti_lifecycle' });
   }
 });
+test('invalid operator TLS/deadline policy fails before listening or provider access',()=>{
+  for(const platformPolicy of [{ca:'invalid'},{ca:'-----BEGIN CERTIFICATE----- PRIVATE KEY'},
+    {timeoutMs:49},{timeoutMs:120001},{timeoutMs:NaN},{selfManagedOriginAllowlist:['http://bad.example']}]) {
+    assert.throws(()=>createLtiLaunchLifecycle({repository:repository(),publicOrigin,platformPolicy}));
+  }
+});
+
 test('invalid public inputs cannot cause database writes or provider access', async () => {
   const repo = repository();let reads = 0;
   repo.registration = repo.context = async () => { reads++;throw Error('unexpected_read'); };

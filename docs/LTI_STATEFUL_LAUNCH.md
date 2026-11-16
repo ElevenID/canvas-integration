@@ -1,11 +1,11 @@
 # Stateful Canvas launch implementation
 
 This branch implements connector-owned protocol state and inbound LTI
-login/launch/confirmation/resource handlers. The HTTPS service can explicitly
-embed this lifecycle; the production OAuth runtime/CLI does not compose it yet,
-so its deployment still has no enabled LTI endpoint. Registration administration
-is implemented in this draft; production runtime/CLI/preflight and actual TLS PostgreSQL-role composition remain
-required before this draft can merge. Canonical Gateway learner association and
+login/launch/confirmation/resource handlers and registration administration.
+The standalone HTTPS runtime and CLI compose these adapters only when an explicit
+`lti` configuration object is present. Omission preserves disabled LTI dispatch.
+The draft still requires exact-candidate CI, independent review of runtime
+composition and automated browser CI before merging. Canonical Gateway learner association and
 deployed end-to-end qualification remain full-goal requirements.
 
 Migration012 adds globally identified local registrations and immutable revisions,
@@ -14,8 +14,9 @@ No Core data, permissions, grants, applications or identity authority are copied
 A separate schema owner installs migrations and provisions roles; runtime installs
 no schema or grants. The prototype tests grant only selected state/receipt writes,
 registration/platform reads and the limited UPDATE capability PostgreSQL requires
-for row locking. They deny registration configuration writes, state-identity
-rewrites and receipt mutation. Production named roles remain unqualified.
+for row locking. The combined HTTP application role also has selected registration
+configuration writes and immutable administration-audit insertion. It cannot
+rewrite state identities or mutate receipts. Production named roles remain unqualified.
 The role remains trusted application SQL: its selected state/receipt INSERT and
 phase UPDATE grants do not constitute a tenant or JWT-verification sandbox. The
 application verifies provider signatures and Gateway authority; this database
@@ -71,13 +72,29 @@ configuration ABA, late expiry, trigger corruption, rollback and immutable
 receipts. It runs the production repository and lifecycle against that database
 through a test-only docker/psql adapter and a real loopback verified-TLS Canvas
 JWKS/JWT peer. Lost begin/confirm replies reconcile original IDs and receipts.
-This is not production PostgreSQL TLS-driver or browser qualification; those tests
-must be added to the existing physical composition before activation.
+This fixture uses a test-only database adapter. The separate
+`python scripts/test_postgres_pool.py` composition now installs all13 migrations
+and exercises the real verified-TLS PostgreSQL driver and restricted HTTP role,
+public Gateway-session HTTPS peer, Canvas pinned JWKS/JWT HTTPS peer, registration
+administration, browser-proof acceptance, replay after closure and current-resource
+denial. Linux CI additionally exercises the private-file standalone CLI; Windows
+uses explicit synthetic credential providers and does not qualify POSIX files.
+Neither fixture qualifies real Canvas or deployed Gateway/wallet operation.
 The same suite exercises the administration adapter against a verified-TLS
 Gateway-session peer and a constrained PostgreSQL role, including tenant/actor
 and permission fences, eight-way operation replay, NULL SQL arguments, stale
 revisions, trigger rollback, lost replies, disabled-platform deactivation and
 catalog pagination.
+
+The optional runtime `lti` policy accepts only `selfManagedOriginAllowlist`,
+`allowedPrivateAddresses`, `ca` and `timeoutMs`. The private CLI configuration
+uses `caFile` instead of inline `ca`; it never inherits OAuth network policy or CA.
+Startup performs read-only required-capability and guard checks before listening,
+rejecting missing privileges, disabled guards, identity/receipt mutation rights,
+table/function ownership, elevated role flags and connector schema CREATE.
+It installs no schema or grants. These checks are not a complete schema provenance
+audit or a tenant/JWT SQL sandbox; owner provisioning and production role approval
+remain separate deployment gates.
 
 The HTTP adapter uses a per-state __Host cookie with Secure, HttpOnly,
 SameSite=None and Partitioned attributes. Cookie-free iframe launches use the

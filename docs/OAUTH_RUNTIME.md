@@ -5,6 +5,11 @@ repository, encrypted vault, read-only OpenBao key provider, Canvas OAuth provid
 lifecycle, public Gateway session authenticator, database HTTP budget and HTTPS
 listener. It exposes only `listen()` and `close()`. The listener includes
 [capture-route administration and manual scheduling](CAPTURE_ROUTE_ADMINISTRATION.md).
+An explicit optional `lti` policy composes connector-owned
+[registration administration and stateful launches](LTI_STATEFUL_LAUNCH.md).
+Omitting it leaves both LTI route families disabled. Its network allowlist and CA
+are separate from the OAuth provider configuration; no platform-supplied URLs or
+replacement verification hooks are accepted.
 A separate worker service performs capture, delivery, refresh and revocation;
 automatic capture scheduling remains unfinished.
 
