@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
+import { createServer, request } from 'node:http';
+import { createOAuthCallbackHandler } from '../src/oauth-callback-http.mjs';
 
 const ORG = 'org-one';
 const PLATFORM = 'platform-one';
@@ -113,6 +115,51 @@ async function started(value, capabilities = ['catalog', 'native_activity_scores
   const url = new URL(result.authorizationUrl);
   return { result, url, state: url.searchParams.get('state'), stored: [...value.authorizations.values()][0] };
 }
+
+async function callbackHttp(t, lifecycle) {
+  const server = createServer(createOAuthCallbackHandler({ lifecycle,
+    completionUrl: 'https://console.example.test/integrations/canvas',
+    rateLimiter: { consume: async () => true },
+  }));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return parameters => new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port: server.address().port,
+      path: '/oauth/callback?' + new URLSearchParams(parameters) }, res => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, location: new URL(res.headers.location) }));
+    });
+    req.on('error', reject); req.end();
+  });
+}
+
+test('HTTP adapter composes with OAuth lifecycle and rejects state replay', async t => {
+  const f = fixture();
+  const authorization = await started(f);
+  const send = await callbackHttp(t, f.lifecycle);
+  const connected = await send({ state: authorization.state, code: 'synthetic-code' });
+  assert.equal(connected.status, 303);
+  assert.equal(connected.location.searchParams.get('outcome'), 'connected');
+  assert.equal(f.connections.size, 1);
+  const repeated = await send({ state: authorization.state, code: 'synthetic-code' });
+  assert.equal(repeated.location.searchParams.get('error_code'), 'oauth_state_invalid');
+  assert.equal(f.calls.filter(call => call[0] === 'exchange').length, 1);
+  assert.equal(f.connections.size, 1);
+});
+
+test('HTTP provider denial consumes state without exchanging or reflecting provider error', async t => {
+  const f = fixture();
+  const authorization = await started(f);
+  const send = await callbackHttp(t, f.lifecycle);
+  const denied = await send({ state: authorization.state, error: 'sensitive-provider-text' });
+  assert.equal(denied.status, 303);
+  assert.equal(denied.location.searchParams.get('error_code'), 'oauth_authorization_denied');
+  assert.doesNotMatch(denied.location.href, /sensitive-provider-text/);
+  const replay = await send({ state: authorization.state, code: 'synthetic-code' });
+  assert.equal(replay.location.searchParams.get('error_code'), 'oauth_state_invalid');
+  assert.equal(f.calls.filter(call => call[0] === 'exchange').length, 0);
+  assert.equal(f.connections.size, 0);
+});
 
 test('start stores only a hash and constructs a fixed Canvas authorization URL', async () => {
   const f = fixture();
