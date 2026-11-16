@@ -82,22 +82,30 @@ export function createLtiRegistrationAdminHandler({store,authenticateAndAuthoriz
         if(!await reauthorize()) return finish(403);
         return previous.conflict?finish(409):finish(200,{receipt:previous.receipt});
       }
+      const reconcileOrConflict=async()=>{
+        // A concurrent identical operation can commit after the first history
+        // read but before a revision/policy precheck. Reconcile its receipt;
+        // never retry a write or treat the new revision as a changed intent.
+        const original=await store.replay(command);
+        if(!await reauthorize()) return finish(403);
+        return original!==null && !original.conflict?finish(200,{receipt:original.receipt}):finish(409);
+      };
       let platform,definition=command.definition;
       if(action!=='deactivate') {
         platform=await store.platform(scope);
         if(!platform || platform.configVersion!==command.expectedPlatformVersion || platform.archived ||
-          (action==='activate' && !platform.enabled)) return finish(409);
+          (action==='activate' && !platform.enabled)) return await reconcileOrConflict();
         if(definition===null) {
           const saved=await store.inspect(scope);
-          if(!saved || saved.version!==command.expectedRegistrationVersion) return finish(409);definition=saved.definition;
+          if(!saved || saved.version!==command.expectedRegistrationVersion) return await reconcileOrConflict();definition=saved.definition;
         }
       }
       if(!await reauthorize()) return finish(403);
       if(action!=='deactivate') {
         try{validateLtiRegistrationPolicy(definition,{registrationId:scope.registrationId,publicOrigin,
-          platformOrigin:platform.canvasOrigin,selfManagedOriginAllowlist:allowlist});}catch{return finish(409);}
+          platformOrigin:platform.canvasOrigin,selfManagedOriginAllowlist:allowlist});}catch{return await reconcileOrConflict();}
       }
-      const result=await store.apply(command);return result===null?finish(409):finish(200,{receipt:result});
+      const result=await store.apply(command);return result===null?await reconcileOrConflict():finish(200,{receipt:result});
     }catch{return finish(503);}
   };
 }

@@ -37,6 +37,9 @@ retries return one original receipt; changed intent conflicts. Historical replay
 precedes current configuration checks but still requires current Gateway
 permission. SQL checks final postimages and audit rows, rolling back trigger
 rewrites. A lost commit reply is recovered using the original operation UUID.
+If an identical concurrent operation commits between the initial history read
+and a revision/policy precheck, the handler rereads its original receipt and
+reauthorizes before reporting success or conflict. It never retries the write.
 Catalog reads use bounded keyset pagination. These configuration grants belong to
 the trusted administration application role; they add no Core authority.
 

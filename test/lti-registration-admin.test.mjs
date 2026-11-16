@@ -13,12 +13,12 @@ async function fixture(options={}) {
   const peer=await httpsFixture(),calls=[];let authCalls=0;
   const identity={organizationId:'org-one',actorId:'actor-one',authorized:true};
   const store={
-    async platform(scope){calls.push(['platform',scope]);return{platformId:'platform-one',configVersion:1,canvasOrigin:options.canvasOrigin??'https://college.instructure.com',enabled:true,archived:false};},
+    async platform(scope){calls.push(['platform',scope]);return{platformId:'platform-one',configVersion:options.platformVersion??1,canvasOrigin:options.canvasOrigin??'https://college.instructure.com',enabled:true,archived:false};},
     async catalog(scope){calls.push(['catalog',scope]);return{registrations:[],nextCursor:null};},
-    async inspect(scope){calls.push(['inspect',scope]);return{version:1,definition:prepareLtiRegistrationDefinition({clientId:'public-client',deploymentId:'deployment-one',trustProfile:'hosted_global',environment:'production'},{registrationId:reg,publicOrigin:peer.origin})};},
+    async inspect(scope){calls.push(['inspect',scope]);return{version:options.registrationVersion??1,definition:prepareLtiRegistrationDefinition({clientId:'public-client',deploymentId:'deployment-one',trustProfile:'hosted_global',environment:'production'},{registrationId:reg,publicOrigin:peer.origin})};},
     async receipt(scope){calls.push(['receipt',scope]);return null;},
-    async replay(command){calls.push(['replay',command]);return options.replay??null;},
-    async apply(command){calls.push(['apply',command]);return{operationId:command.operationId};},
+    async replay(command){calls.push(['replay',command]);return typeof options.replay==='function'?options.replay(command):options.replay??null;},
+    async apply(command){calls.push(['apply',command]);return options.applyNull?null:{operationId:command.operationId};},
   };
   const handler=createLtiRegistrationAdminHandler({store,publicOrigin:peer.origin,selfManagedOriginAllowlist:options.allowlist??[],
     rateLimiter:{consume:async()=>options.quota!==false},authenticateAndAuthorize:async()=>{
@@ -65,6 +65,39 @@ test('exact original receipt replay precedes current platform and trust policy, 
   }finally{await f.close();}
   const conflict=await fixture({replay:{conflict:true}});try{assert.equal((await conflict.send('create',fields)).status,409);}finally{await conflict.close();}
 });
+test('a receipt committed during current-state prechecks reconciles without another write',async()=>{
+  const original={operationId:op};
+  for(const options of [{platformVersion:2},{registrationVersion:2},{canvasOrigin:'https://gateway.internal'},{applyNull:true}]) {
+    let reads=0;
+    const f=await fixture({...options,replay:()=>++reads===1?null:{conflict:false,receipt:original}});
+    try {
+      const action=options.registrationVersion?'activate':'create';
+      const command=action==='activate'?{operation_id:op,expected_platform_version:'1',expected_registration_version:'1'}:fields;
+      const result=await f.send(action,command);assert.equal(result.status,200);assert.deepEqual(result.body,{receipt:original});
+      assert.equal(f.calls.filter(([name])=>name==='apply').length,options.applyNull?1:0);
+      assert.equal(reads,2);assert.ok(f.authCalls()>=2);
+    }finally{await f.close();}
+  }
+});
+
+test('concurrent history reconciliation still denies revoked or changed Gateway authority',async()=>{
+  for(const finalIdentity of [{organizationId:'org-one',actorId:'actor-one',authorized:false},
+    {organizationId:'org-two',actorId:'actor-one',authorized:true},{organizationId:'org-one',actorId:'actor-two',authorized:true}]) {
+    let reads=0;
+    const f=await fixture({platformVersion:2,finalIdentity,replay:()=>++reads===1?null:{conflict:false,receipt:{operationId:op}}});
+    try {assert.equal((await f.send('create',fields)).status,403);assert.equal(f.calls.filter(([name])=>name==='apply').length,0);}
+    finally{await f.close();}
+  }
+});
+
+test('concurrent reconciliation read failure is redacted and never retries a write',async()=>{
+  let reads=0;
+  const f=await fixture({platformVersion:2,replay:()=>{if(++reads===2)throw Error('private storage detail');return null;}});
+  try{const result=await f.send('create',fields);assert.equal(result.status,503);assert.equal(result.body,null);
+    assert.equal(f.calls.filter(([name])=>name==='apply').length,0);}
+  finally{await f.close();}
+});
+
 test('self-managed registration requires independent exact operator origin allowlist',async()=>{
   const self={...fields,trust_profile:'self_managed_same_origin'};delete self.environment;
   for(const [allowlist,expected] of [[[],409],[['https://canvas.custom.example'],200]]) {
