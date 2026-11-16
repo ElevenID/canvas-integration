@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { request } from 'node:https';
-import { setImmediate } from 'node:timers/promises';
+import { createConnection } from 'node:net';
+import { setImmediate, setTimeout as pause } from 'node:timers/promises';
 import { createConnectorPostgresPool } from '../src/postgres-pool.mjs';
 import { createOpenBaoKeyProvider } from '../src/openbao-key-provider.mjs';
 import { createEncryptedVault } from '../src/encrypted-vault.mjs';
@@ -99,7 +100,7 @@ async function cliRuntime() {
     LANG: process.env.LANG, CANVAS_CONNECTOR_CONFIG_FILE: configFile }).filter(([, value]) => typeof value === 'string'));
   const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/serve-oauth.mjs', import.meta.url))],
     { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = '', stderr = '', pending = '', started = false, stopped = false, accept, reject, closing;
+  let stdout = '', stderr = '', pending = '', started = false, stopped = false, port, accept, reject, closing;
   const listening = new Promise((resolve, fail) => { accept = resolve; reject = fail; });
   void listening.catch(() => {});
   const watchdog = setTimeout(() => { reject(Error('synthetic_cli_watchdog')); child.kill('SIGKILL'); }, 20000);
@@ -111,7 +112,7 @@ async function cliRuntime() {
       const index = pending.indexOf('\n'), line = pending.slice(0, index); pending = pending.slice(index + 1);
       try {
         const value = JSON.parse(line);
-        if (value.state === 'listening' && Number.isInteger(value.port)) { started = true; accept({ port: value.port }); }
+        if (value.state === 'listening' && Number.isInteger(value.port)) { started = true; port = value.port; accept({ port }); }
         else if (value.state === 'stopped') stopped = true;
         else throw Error();
       } catch { reject(Error('synthetic_cli_protocol_failed')); }
@@ -121,7 +122,24 @@ async function cliRuntime() {
   const exited = new Promise(resolve => child.on('close', (code, signal) => {
     clearTimeout(watchdog); if (!started) reject(Error(`synthetic_cli_start_failed: ${stderr}`)); resolve({ code, signal });
   }));
-  const server = { listen: () => listening, close() {
+  const server = { listen: () => listening, async waitUntilDraining() {
+    const deadline = performance.now() + 3000;
+    while (performance.now() < deadline) {
+      assert.equal(child.exitCode, null); assert.equal(child.signalCode, null); assert.equal(stopped, false);
+      const refused = await new Promise((resolve, fail) => {
+        const socket = createConnection({ host: '127.0.0.1', port }); let finished = false;
+        const finish = (error, value) => { if (finished) return; finished = true; socket.destroy(); error ? fail(error) : resolve(value); };
+        socket.once('connect', () => finish(null, false));
+        socket.once('error', error => error.code === 'ECONNREFUSED' ? finish(null, true) : finish(Error('synthetic_cli_probe_failed')));
+        socket.setTimeout(200, () => finish(Error('synthetic_cli_probe_timeout')));
+      });
+      if (refused) {
+        assert.equal(child.exitCode, null); assert.equal(child.signalCode, null); assert.equal(stopped, false); return;
+      }
+      await pause(10);
+    }
+    throw Error('synthetic_cli_drain_not_observed');
+  }, close() {
     if (closing) return closing;
     if (child.exitCode === null && !child.killed) child.kill('SIGTERM');
     closing = (async () => {
@@ -221,7 +239,9 @@ try {
   const aborted = assert.rejects(completed.response);
   await exchangeEntered; completed.request.destroy(); await aborted;
   let closed = false; const stopping = server.close().then(() => { closed = true; });
-  await setImmediate(); assert.equal(closed, false);
+  if (fileCustody) await server.waitUntilDraining();
+  else await setImmediate();
+  assert.equal(closed, false);
   release(); await stopping;
   if (fileCustody) console.log('Actual standalone CLI loaded private configuration and drained SIGTERM through disconnected-client OAuth publication');
   const connection = (await pool.query('SELECT client_secret_ref,access_token_ref,refresh_token_ref FROM canvas_connector.connections WHERE organization_id=$1 AND platform_id=$2', [org, 'runtime-platform'])).rows[0];
