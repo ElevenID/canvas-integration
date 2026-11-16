@@ -299,13 +299,22 @@ try {
     GRANT INSERT(state_hash,launch_id,token_hash,receipt) ON canvas_connector.lti_launch_receipts TO canvas_oauth_http;
     GRANT INSERT(organization_id,operation_id,platform_id,registration_id,actor_id,action,request,receipt)
       ON canvas_connector.lti_registration_operation_audit TO canvas_oauth_http;
-    GRANT EXECUTE ON FUNCTION canvas_connector.lti_visible_identifier(text),canvas_connector.lti_numeric_date(jsonb),
+    GRANT SELECT ON canvas_connector.lti_provider_identities,canvas_connector.lti_provider_identity_claims,
+      canvas_connector.lti_provider_identity_observations TO canvas_oauth_http;
+    GRANT INSERT(id,organization_id,platform_id,issuer,client_id,deployment_id,subject) ON canvas_connector.lti_provider_identities TO canvas_oauth_http;
+    GRANT UPDATE(canvas_user_id,status) ON canvas_connector.lti_provider_identities TO canvas_oauth_http;
+    GRANT INSERT(identity_id,canvas_user_id) ON canvas_connector.lti_provider_identity_claims TO canvas_oauth_http;
+    GRANT INSERT(state_hash,launch_id,identity_id,token_hash,canvas_user_id,receipt) ON canvas_connector.lti_provider_identity_observations TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION canvas_connector.observe_lti_provider_identity(uuid,text,text,uuid) TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION canvas_connector.lti_visible_identifier(text),canvas_connector.lti_numeric_date(jsonb),canvas_connector.lti_canvas_user_id(text),
       canvas_connector.lti_claims_match(jsonb,canvas_connector.lti_registrations,canvas_connector.platforms,text),
       canvas_connector.begin_lti_launch(uuid,bigint,bigint,text,text,text,uuid),canvas_connector.stage_lti_launch(text,text,jsonb),
       canvas_connector.confirm_lti_launch(text,text,text),canvas_connector.administer_lti_registration(text,text,text,uuid,uuid,text,bigint,bigint,jsonb)
       TO canvas_oauth_http;`);
   for(const [table,trigger] of [['lti_registrations','lti_registration_revision'],['lti_launch_states','lti_launch_state_transition'],
-    ['lti_launch_receipts','lti_launch_receipt_immutable'],['lti_registration_operation_audit','lti_registration_audit_immutable']]) {
+    ['lti_launch_receipts','lti_launch_receipt_immutable'],['lti_registration_operation_audit','lti_registration_audit_immutable'],
+    ['lti_provider_identities','lti_provider_identity_revision'],['lti_provider_identity_claims','lti_provider_identity_claim_immutable'],
+    ['lti_provider_identity_observations','lti_provider_identity_observation_immutable']]) {
     owner(`ALTER TABLE canvas_connector.${table} DISABLE TRIGGER ${trigger};`);
     try {const denied=await runtime({lti});await assert.rejects(denied.listen(),{message:'connector_oauth_runtime_unavailable'});}
     finally {owner(`ALTER TABLE canvas_connector.${table} ENABLE TRIGGER ${trigger};`);}

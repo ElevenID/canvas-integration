@@ -18,6 +18,7 @@ import { createLtiLaunchRepository } from './lti-launch-repository.mjs';
 import { createLtiLaunchLifecycle } from './lti-launch-lifecycle.mjs';
 import { createLtiRegistrationAdminStore } from './lti-registration-admin-store.mjs';
 import { preflightLtiRuntime } from './lti-runtime-preflight.mjs';
+import { createLtiProviderIdentityStore } from './lti-provider-identity-store.mjs';
 
 const unavailable = () => new Error('connector_oauth_runtime_unavailable');
 function fields(value, allowed) {
@@ -47,6 +48,7 @@ export async function createConnectorOAuthRuntime(configuration) {
       ...(lti === undefined ? {} : {
         ltiLifecycle:createLtiLaunchLifecycle({repository:createLtiLaunchRepository(pool),publicOrigin:http.publicOrigin,platformPolicy:lti}),
         ltiRegistrationStore:createLtiRegistrationAdminStore(pool),
+        ltiIdentityStore:createLtiProviderIdentityStore(pool),
         ltiSelfManagedOriginAllowlist:lti.selfManagedOriginAllowlist??[],
       }),
       recoveryStore:createOAuthAttemptRecoveryStore(pool),

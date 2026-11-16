@@ -86,24 +86,28 @@ CREATE TRIGGER lti_provider_identity_claim_immutable BEFORE UPDATE OR DELETE ON 
 CREATE TRIGGER lti_provider_identity_observation_immutable BEFORE UPDATE OR DELETE ON canvas_connector.lti_provider_identity_observations
  FOR EACH ROW EXECUTE FUNCTION canvas_connector.keep_lti_provider_identity_history();
 
-CREATE FUNCTION canvas_connector.observe_lti_provider_identity(requested_state text, requested_browser text, new_identity uuid)
+CREATE FUNCTION canvas_connector.observe_lti_provider_identity(requested_registration uuid, requested_state text, requested_browser text, new_identity uuid)
 RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog AS $$
 DECLARE saved canvas_connector.lti_launch_states; definition canvas_connector.lti_registrations; host canvas_connector.platforms;
+ launch_audit canvas_connector.lti_launch_receipts;
  prior canvas_connector.lti_provider_identity_observations; identity_row canvas_connector.lti_provider_identities;
  previous canvas_connector.lti_provider_identities; changed canvas_connector.lti_provider_identities;
  numeric_id text; conflict_ids uuid[]; target_id uuid; expected_rows jsonb:='[]'; observed_at timestamptz;
  expected_receipt jsonb; expected_status text; expected_numeric text; started timestamptz:=clock_timestamp();
 BEGIN
- IF requested_state IS NULL OR requested_state !~ '^[a-f0-9]{64}$' OR requested_browser IS NULL
+ IF requested_registration IS NULL OR requested_state IS NULL OR requested_state !~ '^[a-f0-9]{64}$' OR requested_browser IS NULL
   OR requested_browser !~ '^[a-f0-9]{64}$' OR new_identity IS NULL THEN RETURN NULL; END IF;
  SELECT * INTO saved FROM canvas_connector.lti_launch_states WHERE state_hash=requested_state;
- IF NOT FOUND THEN RETURN NULL; END IF;
+ IF NOT FOUND OR saved.registration_id IS DISTINCT FROM requested_registration THEN RETURN NULL; END IF;
  SELECT * INTO host FROM canvas_connector.platforms WHERE organization_id=saved.organization_id AND id=saved.platform_id FOR UPDATE;
  SELECT * INTO definition FROM canvas_connector.lti_registrations WHERE id=saved.registration_id FOR UPDATE;
  SELECT * INTO saved FROM canvas_connector.lti_launch_states WHERE state_hash=requested_state FOR UPDATE;
- IF saved.browser_hash IS DISTINCT FROM requested_browser OR saved.phase IS DISTINCT FROM 'accepted'
-   OR NOT EXISTS(SELECT 1 FROM canvas_connector.lti_launch_receipts a WHERE a.state_hash=saved.state_hash
-      AND a.launch_id=saved.launch_id AND a.token_hash=saved.token_hash) THEN RETURN NULL; END IF;
+ IF saved.registration_id IS DISTINCT FROM requested_registration OR saved.browser_hash IS DISTINCT FROM requested_browser OR saved.phase IS DISTINCT FROM 'accepted' THEN RETURN NULL; END IF;
+ SELECT * INTO launch_audit FROM canvas_connector.lti_launch_receipts WHERE state_hash=saved.state_hash;
+ IF NOT FOUND OR launch_audit.launch_id IS DISTINCT FROM saved.launch_id OR launch_audit.token_hash IS DISTINCT FROM saved.token_hash
+  OR launch_audit.receipt IS DISTINCT FROM jsonb_build_object('launchId',saved.launch_id,'registrationId',saved.registration_id,
+    'organizationId',saved.organization_id,'platformId',saved.platform_id,'platformVersion',saved.platform_version,
+    'registrationVersion',saved.registration_version,'acceptedAtMs',floor(extract(epoch FROM saved.accepted_at)*1000)::bigint) THEN RETURN NULL; END IF;
  SELECT * INTO prior FROM canvas_connector.lti_provider_identity_observations WHERE state_hash=requested_state;
  IF FOUND THEN
   IF prior.launch_id=saved.launch_id AND prior.token_hash=saved.token_hash THEN RETURN prior.receipt; END IF;
@@ -174,6 +178,7 @@ BEGIN
    OR NOT EXISTS(SELECT 1 FROM canvas_connector.platforms p WHERE to_jsonb(p)=to_jsonb(host))
    OR NOT EXISTS(SELECT 1 FROM canvas_connector.lti_registrations r WHERE to_jsonb(r)=to_jsonb(definition))
    OR NOT EXISTS(SELECT 1 FROM canvas_connector.lti_launch_states s WHERE to_jsonb(s)=to_jsonb(saved))
+   OR NOT EXISTS(SELECT 1 FROM canvas_connector.lti_launch_receipts a WHERE to_jsonb(a)=to_jsonb(launch_audit))
    OR saved.expires_at<=clock_timestamp() OR NOT canvas_connector.lti_claims_match(saved.protocol_claims,definition,host,saved.nonce) THEN
   RAISE EXCEPTION 'LTI provider identity observation changed'; END IF;
  RETURN expected_receipt;
@@ -182,5 +187,5 @@ $$;
 REVOKE ALL ON canvas_connector.lti_provider_identities,canvas_connector.lti_provider_identity_claims,
  canvas_connector.lti_provider_identity_observations FROM PUBLIC;
 REVOKE ALL ON FUNCTION canvas_connector.lti_canvas_user_id(text),canvas_connector.guard_lti_provider_identity(),
- canvas_connector.keep_lti_provider_identity_history(),canvas_connector.observe_lti_provider_identity(text,text,uuid) FROM PUBLIC;
+ canvas_connector.keep_lti_provider_identity_history(),canvas_connector.observe_lti_provider_identity(uuid,text,text,uuid) FROM PUBLIC;
 COMMIT;

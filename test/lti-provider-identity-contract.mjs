@@ -3,19 +3,26 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID,randomBytes } from 'node:crypto';
+import { createLtiProviderIdentityStore } from '../src/lti-provider-identity-store.mjs';
 const container=process.argv[2];assert.match(container??'',/^canvas-lti-state-[a-f0-9]{32}$/);
 const run=promisify(execFile),quote=value=>value===null?'NULL':"'"+String(value).replaceAll("'","''")+"'";
 async function sql(statement,role=false) {
   const result=await run('docker',['exec',container,'psql','-X','-q','-A','-t','-h','127.0.0.1','-U','postgres',
     '-v','ON_ERROR_STOP=1','-c',(role?'SET ROLE lti_runtime; ':'')+statement]);return result.stdout.trim();
 }
+let loseReply=false;
+const store=createLtiProviderIdentityStore({async query(statement,values){
+ const result=await sql(statement.replace(/\$(\d+)/g,(_,number)=>quote(values[Number(number)-1])),true);
+ if(loseReply && statement.includes('observe_lti_provider_identity') && result){loseReply=false;throw Error('synthetic_lost_commit_reply');}
+ return {rows:[{result:result?JSON.parse(result):null}]};
+}});
 await sql(`GRANT SELECT ON canvas_connector.lti_provider_identities,canvas_connector.lti_provider_identity_claims,
   canvas_connector.lti_provider_identity_observations TO lti_runtime;
  GRANT INSERT(id,organization_id,platform_id,issuer,client_id,deployment_id,subject) ON canvas_connector.lti_provider_identities TO lti_runtime;
  GRANT UPDATE(canvas_user_id,status) ON canvas_connector.lti_provider_identities TO lti_runtime;
  GRANT INSERT(identity_id,canvas_user_id) ON canvas_connector.lti_provider_identity_claims TO lti_runtime;
  GRANT INSERT(state_hash,launch_id,identity_id,token_hash,canvas_user_id,receipt) ON canvas_connector.lti_provider_identity_observations TO lti_runtime;
- GRANT EXECUTE ON FUNCTION canvas_connector.observe_lti_provider_identity(text,text,uuid) TO lti_runtime;
+ GRANT EXECUTE ON FUNCTION canvas_connector.observe_lti_provider_identity(uuid,text,text,uuid) TO lti_runtime;
  INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
   VALUES('identity-org','identity-platform','https://canvas.identity.example',true);`);
 const reg=randomUUID();
@@ -30,17 +37,18 @@ async function launch(subject,numeric,{accepted=true,registration=reg,client='cl
  assert.ok(await sql(`SELECT canvas_connector.begin_lti_launch('${registration}',1,1,'${state}','${browser}','${nonce}','${randomUUID()}');`,true));
  assert.ok(await sql(`SELECT canvas_connector.stage_lti_launch('${state}','${token}',${quote(JSON.stringify(payload))}::jsonb);`,true));
  if(accepted) assert.ok(await sql(`SELECT canvas_connector.confirm_lti_launch('${state}','${browser}','${token}');`,true));
- return {state,browser,token,subject};
+ return {registrationId:registration,state,browser,token,subject};
 }
 async function observe(value,browser=value.browser) {
- const result=await sql(`SELECT canvas_connector.observe_lti_provider_identity('${value.state}',${quote(browser)},'${randomUUID()}');`,true);
- return result?JSON.parse(result):null;
+ return store.observe({registrationId:value.registrationId,stateHash:value.state,browserHash:browser});
 }
+const current=value=>store.current({registrationId:value.registrationId,stateHash:value.state,browserHash:value.browser});
 const absent=await launch('subject-a'),observed=await observe(absent);
 assert.equal(observed.status,'subject_observed');assert.equal(observed.numericIdSupplied,false);
 const a=await launch('subject-a','42'),receipts=await Promise.all(Array.from({length:8},()=>observe(a)));
 for(const value of receipts)assert.deepEqual(value,receipts[0]);
 assert.equal(receipts[0].status,'numeric_linked');assert.equal(receipts[0].identityRevision,2);
+assert.equal((await current(a)).canvasUserId,'42');
 assert.equal(observed.identityId,receipts[0].identityId);assert.deepEqual(await observe(absent),observed);
 const changed=await launch('subject-a','43'),quarantined=await observe(changed);
 assert.equal(quarantined.status,'quarantined');assert.equal(quarantined.identityRevision,3);
@@ -49,11 +57,14 @@ const b=await observe(await launch('subject-b','43'));assert.equal(b.status,'qua
 const c=await observe(await launch('subject-c','42'));assert.equal(c.status,'quarantined');
 assert.equal((await observe(await launch('subject-a','42'))).status,'quarantined');
 assert.deepEqual(await observe(a),receipts[0]); // History does not unquarantine current mappings.
+assert.equal((await current(a)).status,'quarantined');assert.equal((await current(a)).canvasUserId,null);
 const staged=await launch('staged-only','50',{accepted:false});assert.equal(await observe(staged),null);
 assert.equal(await observe(a,'e'.repeat(64)),null);
-assert.equal(await sql(`SELECT canvas_connector.observe_lti_provider_identity(NULL,'${a.browser}','${randomUUID()}');`,true),'');
-assert.equal(await sql(`SELECT canvas_connector.observe_lti_provider_identity('${a.state}',NULL,'${randomUUID()}');`,true),'');
-assert.equal(await sql(`SELECT canvas_connector.observe_lti_provider_identity('${a.state}','${a.browser}',NULL);`,true),'');
+assert.equal(await sql(`SELECT canvas_connector.observe_lti_provider_identity('${reg}',NULL,'${a.browser}','${randomUUID()}');`,true),'');
+assert.equal(await sql(`SELECT canvas_connector.observe_lti_provider_identity('${reg}','${a.state}',NULL,'${randomUUID()}');`,true),'');
+assert.equal(await sql(`SELECT canvas_connector.observe_lti_provider_identity('${reg}','${a.state}','${a.browser}',NULL);`,true),'');
+assert.equal(await sql(`SELECT canvas_connector.observe_lti_provider_identity(NULL,'${a.state}','${a.browser}','${randomUUID()}');`,true),'');
+assert.equal(await observe({...a,registrationId:randomUUID()}),null);
 const numericSubject=await observe(await launch('12345'));assert.equal(numericSubject.status,'subject_observed');
 const secondReg=randomUUID();
 await sql(`INSERT INTO canvas_connector.lti_registrations(id,organization_id,platform_id,client_id,deployment_id,trust_profile,target_link_uri,enabled)
@@ -69,9 +80,26 @@ try {await assert.rejects(observe(rollback));}finally{await sql('DROP TRIGGER zz
 assert.equal(await sql("SELECT count(*) FROM canvas_connector.lti_provider_identities WHERE subject='trigger-rewrite';"),'0');
 assert.equal(await sql(`SELECT count(*) FROM canvas_connector.lti_provider_identity_observations WHERE state_hash='${rollback.state}';`),'0');
 assert.equal((await observe(rollback)).status,'numeric_linked');
+const late=await launch('late-configuration','72');
+await sql(`CREATE FUNCTION canvas_connector.test_identity_close() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+ BEGIN UPDATE canvas_connector.platforms SET enabled=false WHERE id='identity-platform';RETURN NEW;END;$$;
+ CREATE TRIGGER zz_identity_close BEFORE INSERT ON canvas_connector.lti_provider_identity_observations FOR EACH ROW EXECUTE FUNCTION canvas_connector.test_identity_close();`);
+try{await assert.rejects(observe(late));}finally{await sql('DROP TRIGGER zz_identity_close ON canvas_connector.lti_provider_identity_observations; DROP FUNCTION canvas_connector.test_identity_close();');}
+assert.equal(await sql("SELECT enabled FROM canvas_connector.platforms WHERE id='identity-platform';"),'t');
+assert.equal(await sql("SELECT count(*) FROM canvas_connector.lti_provider_identities WHERE subject='late-configuration';"),'0');
+const expiring=await launch('late-expiry','73',{expiry:2});
+await sql(`CREATE FUNCTION canvas_connector.test_identity_delay() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_sleep(2.2);RETURN NEW;END;$$;
+ CREATE TRIGGER zz_identity_delay BEFORE INSERT ON canvas_connector.lti_provider_identity_observations FOR EACH ROW EXECUTE FUNCTION canvas_connector.test_identity_delay();`);
+try{await assert.rejects(observe(expiring));}finally{await sql('DROP TRIGGER zz_identity_delay ON canvas_connector.lti_provider_identity_observations; DROP FUNCTION canvas_connector.test_identity_delay();');}
+assert.equal(await sql("SELECT count(*) FROM canvas_connector.lti_provider_identities WHERE subject='late-expiry';"),'0');assert.equal(await observe(expiring),null);
+const lost=await launch('lost-reply','71');loseReply=true;
+await assert.rejects(observe(lost),{message:'lti_provider_identity_unavailable'});
+const lostHistory=JSON.parse(await sql(`SELECT receipt FROM canvas_connector.lti_provider_identity_observations WHERE state_hash='${lost.state}';`));
+assert.deepEqual(await observe(lost),lostHistory);
 for(const query of ['DELETE FROM canvas_connector.lti_provider_identities','UPDATE canvas_connector.lti_provider_identity_claims SET canvas_user_id=\'70\'',
  'DELETE FROM canvas_connector.lti_provider_identity_observations','UPDATE canvas_connector.lti_provider_identities SET subject=\'rewritten\'']) await assert.rejects(sql(query,true));
 const closed=await launch('closed','80');
 await sql("UPDATE canvas_connector.platforms SET enabled=false WHERE id='identity-platform';");
 assert.equal(await observe(closed),null);assert.deepEqual(await observe(a),receipts[0]);
+assert.equal(await current(a),null);
 console.log('Actual PG16 provider identity: accepted browser proof,8-way original replay,opaque/numeric collision quarantine,scope isolation,concurrent aliases,trigger rollback,history and closed-configuration fences passed; no Marty identity authority');
