@@ -8,6 +8,7 @@ import { createCanvasOAuthLifecycle } from './canvas-oauth.mjs';
 import { createGatewayAdminAuthenticator } from './gateway-admin-auth.mjs';
 import { createConnectorHttpsService } from './connector-https-service.mjs';
 import { createOAuthHttpRateLimiter } from './oauth-http-rate-limiter.mjs';
+import { createOAuthAttemptRecoveryStore } from './oauth-attempt-recovery.mjs';
 
 const unavailable = () => new Error('connector_oauth_runtime_unavailable');
 function fields(value, allowed) {
@@ -33,6 +34,7 @@ export async function createConnectorOAuthRuntime(configuration) {
     const lifecycle = createCanvasOAuthLifecycle({ publicOrigin: http.publicOrigin,
       completionUrl: http.completionUrl, repository, secretVault, provider });
     service = createConnectorHttpsService({ ...http, lifecycle, authenticateAndAuthorize,
+      recoveryStore:createOAuthAttemptRecoveryStore(pool),
       rateLimiter: createOAuthHttpRateLimiter(pool) });
     let state = 'created', starting, closing;
     async function preflight() {
@@ -45,6 +47,8 @@ export async function createConnectorOAuthRuntime(configuration) {
           ('oauth_status','SELECT'),('oauth_status','INSERT'),('oauth_status','UPDATE'),
           ('connections','SELECT'),('connections','INSERT'),('connections','UPDATE'),
           ('authorization_attempts','SELECT'),('authorization_attempts','INSERT'),('authorization_attempts','UPDATE'),
+          ('authorization_recovery_audit','SELECT'),('authorization_recovery_audit','INSERT'),
+          ('revocation_jobs','SELECT'),('revocation_jobs','INSERT'),
           ('oauth_http_limit','SELECT')) AS required(name,privilege)
         WHERE NOT has_table_privilege(current_user,'canvas_connector.'||required.name,required.privilege)
       ) AND has_any_column_privilege(current_user,'canvas_connector.platforms','UPDATE')
@@ -61,6 +65,7 @@ export async function createConnectorOAuthRuntime(configuration) {
         AND has_function_privilege(current_user,'canvas_connector.begin_authorization_exchange(text,text,text)','EXECUTE')
         AND has_function_privilege(current_user,'canvas_connector.require_authorization_reconciliation(text,text,text)','EXECUTE')
         AND has_function_privilege(current_user,'canvas_connector.publish_authorization_connection(text,text,text)','EXECUTE')
+        AND has_function_privilege(current_user,'canvas_connector.recover_authorization_attempt(text,text,text,bigint,uuid,text,text)','EXECUTE')
         AND has_function_privilege(current_user,'canvas_connector.stage_authorization_result(text,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamp with time zone)','EXECUTE')
         AND has_function_privilege(current_user,'canvas_connector.mark_authorization_pending(text,text,bigint,text)','EXECUTE') AS ready`);
       if (result?.rows?.length !== 1 || result.rows[0].ready !== true) throw unavailable();

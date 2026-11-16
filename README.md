@@ -124,4 +124,6 @@ remains open.
 
 The [initial OAuth custody adapters](docs/INITIAL_OAUTH_CUSTODY.md) persist
 exchange attempts and atomically stage encrypted token references in the actual
-callback. Audited operator recovery and production qualification remain required.
+callback. The [operator recovery API](docs/OAUTH_ATTEMPT_RECOVERY.md) adds bounded
+inspection, immutable operation receipts and staged-token revocation disposition.
+Operator UI, unknown-provider resolution and production qualification remain required.

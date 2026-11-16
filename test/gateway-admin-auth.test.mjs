@@ -17,9 +17,9 @@ test('authenticator uses only public Gateway session and current exact permissio
       : { permissions: permitted ? ['integration-connector:edit'] : [], is_owner: true }));
     const authenticate = createGatewayAdminAuthenticator({ gatewayOrigin: fixture.origin, adminOrigin: admin,
       sessionCookieName: 'session', ca: fixture.ca });
-    assert.deepEqual(await authenticate(incoming(), operation), { organizationId: org, authorized: true });
+    assert.deepEqual(await authenticate(incoming(), operation), { organizationId: org, actorId:'user-one', authorized: true });
     permitted = false;
-    assert.deepEqual(await authenticate(incoming(), operation), { organizationId: org, authorized: false });
+    assert.deepEqual(await authenticate(incoming(), operation), { organizationId: org, actorId:'user-one', authorized: false });
     assert.equal(fixture.seen.length, 4, 'authority must not be cached');
     assert.equal(fixture.seen[1].url, `/v1/organizations/${org}/members/me/permissions`);
     for (const entry of fixture.seen) {

@@ -50,9 +50,10 @@ not reopen or replace a connection.
 
 The internal tenant/platform/hash-scoped `authorizationAttempt` snapshot can
 identify committed references after a lost reply. It exports no ciphertext or
-plaintext and is not an operator authorization API. Recovery UI, audited
-operator disposition, revocation/retention and process-crash detection are
-unfinished. When exchange may have issued tokens but staging did not commit,
+plaintext. The [operator recovery API](OAUTH_ATTEMPT_RECOVERY.md) adds audited
+disposition for unstarted and known staged attempts. Browser recovery UI,
+full retention and process-crash detection remain unfinished. When exchange may
+have issued tokens but staging did not commit,
 the attempt records uncertainty without recoverable token material; an operator
 must resolve the Canvas grant. Do not expire or delete unresolved
 attempts or their secrets automatically. The active-exchange index deliberately
