@@ -90,6 +90,7 @@ def main():
             def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage,pg],check=True,cwd=ROOT,env=env,timeout=30)
             node('initial')
             subprocess.run(['node',str(ROOT/'test/connector-oauth-runtime-contract.mjs'),str(fixture),pg,bao],check=True,cwd=ROOT,env=env,timeout=60)
+            subprocess.run(['node',str(ROOT/'test/connector-worker-runtime-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=90)
             subprocess.run(['node',str(ROOT/'test/observation-outbox-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=60)
             subprocess.run(['node',str(ROOT/'test/rest-capture-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=60)
             key('kv','put','-mount=connector-kv','-cas=1','canvas-envelope/current','id=canvas-key-two')

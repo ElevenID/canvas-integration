@@ -131,7 +131,13 @@ async function cliRuntime() {
         const socket = createConnection({ host: '127.0.0.1', port }); let finished = false;
         const finish = (error, value) => { if (finished) return; finished = true; socket.destroy(); error ? fail(error) : resolve(value); };
         socket.once('connect', () => finish(null, false));
-        socket.once('error', error => error.code === 'ECONNREFUSED' ? finish(null, true) : finish(Error('synthetic_cli_probe_failed')));
+        socket.once('error', error => {
+          if (error.code === 'ECONNREFUSED') finish(null, true);
+          // A connection can race listener closure. Reset is inconclusive:
+          // retry within the deadline and still require actual refusal.
+          else if (error.code === 'ECONNRESET') finish(null, false);
+          else finish(Error(`synthetic_cli_probe_failed:${error.code}`));
+        });
         socket.setTimeout(200, () => finish(Error('synthetic_cli_probe_timeout')));
       });
       if (refused) {

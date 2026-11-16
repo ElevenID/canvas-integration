@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "database": {
+    "host": "connector-database.example.invalid",
+    "port": 5432,
+    "database": "canvas_connector",
+    "user": "canvas_connector_workers",
+    "passwordFile": "/run/credentials/canvas-workers/database-password",
+    "caFile": "/run/credentials/canvas-workers/database-ca.pem",
+    "maxConnections": 4,
+    "connectTimeoutMs": 2000,
+    "queryTimeoutMs": 10000
+  },
+  "keyCustody": {
+    "openbaoOrigin": "https://connector-keys.example.invalid",
+    "mount": "connector-kv",
+    "keyPath": "canvas-envelope",
+    "keyNamespace": "canvas",
+    "tokenFile": "/run/credentials/canvas-workers/openbao-token",
+    "caFile": "/run/credentials/canvas-workers/openbao-ca.pem"
+  },
+  "canvas": {},
+  "gateway": { "gatewayOrigin": "https://gateway.example.invalid" },
+  "refreshTargets": [{ "organizationId": "configured-organization", "platformId": "configured-platform" }],
+  "producers": [{
+    "organizationId": "configured-organization",
+    "producerRef": "configured-producer",
+    "apiKeyFile": "/run/credentials/canvas-workers/gateway-organization-key"
+  }],
+  "pollIntervalMs": 1000
+}

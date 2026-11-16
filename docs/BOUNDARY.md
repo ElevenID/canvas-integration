@@ -35,7 +35,8 @@ redirects, bounded response bytes and one absolute deadline.
 The standalone HTTPS service composes concrete PostgreSQL, OpenBao, encrypted
 vault, Gateway session authentication, OAuth start/callback and operator recovery
 adapters. Refresh/revocation workers, capture and observation outbox are implemented
-and physically tested; worker scheduling and production deployment remain open.
+and physically tested. The separate worker process adds serialized scheduling;
+production deployment remains open.
 There is no in-memory or plaintext production fallback. See `OAUTH_PROVIDER.md`,
 `SERVICE_BOOTSTRAP.md` and `OAUTH_ATTEMPT_RECOVERY.md`.
 
@@ -91,7 +92,7 @@ mapping; OAuth token possession alone does not authorize arbitrary browser IDs.
    application/subject linking, result/status reads and delivery acknowledgments.
    Never expose internal endpoints or simply assert that external facts are
    trusted. Bind sources, evidence types and tenant authority through policy.
-3. Complete production role/deployment qualification, worker scheduling, unknown
+3. Complete production role/deployment qualification, operator capture scheduling, unknown
    OAuth outcome resolution and LTI/AGS/NRPS providers. Qualify
    the extracted OAuth and REST adapters against a synthetic Canvas tenant
    before replacing the in-core implementation. Keep tool signing distinct

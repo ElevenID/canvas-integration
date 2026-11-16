@@ -127,3 +127,7 @@ exchange attempts and atomically stage encrypted token references in the actual
 callback. The [operator recovery API](docs/OAUTH_ATTEMPT_RECOVERY.md) adds bounded
 inspection, immutable operation receipts and staged-token revocation disposition.
 Operator UI, unknown-provider resolution and production qualification remain required.
+
+The separate [worker process](docs/WORKER_SERVICE.md) composes refresh, revocation,
+REST capture and public Gateway delivery with serialized polling, private-file
+credential interfaces and graceful drain. It uses its own connector database role.
