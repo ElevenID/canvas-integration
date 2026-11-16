@@ -64,6 +64,28 @@ async function fixture(t, overrides = {}) {
   return { service, send, begin, starts, callbacks, peer, address, configuration };
 }
 
+test('operator shell is static, same-origin and cannot disclose authenticated state or execute query input',async t=>{
+  const f=await fixture(t);
+  for(const [path,type] of [['/admin','text/html'],['/admin/app.js','text/javascript'],['/admin/styles.css','text/css'],['/complete','text/html']]) {
+    const result=await f.send({path,method:'GET',headers:{Cookie:'',Origin:'https://other.example'}});
+    assert.equal(result.status,200);assert.ok(result.headers['content-type'].startsWith(type));
+    assert.equal(result.headers['cache-control'],'no-store');assert.equal(result.headers['x-frame-options'],'DENY');
+    assert.equal(result.headers['cross-origin-resource-policy'],'same-origin');
+    assert.match(result.headers['content-security-policy'],/connect-src 'self'/);
+    assert.equal(result.headers['content-security-policy'].includes('unsafe-inline'),false);
+    assert.equal(result.headers['set-cookie'],undefined);
+    if(path==='/admin') {assert.match(result.body,/<fieldset id="workspace" disabled>/);assert.match(result.body,/method="post" action="\/admin"/);}
+    assert.equal((await f.send({path,method:'POST'})).status,405);
+  }
+  for(const path of ['/admin?platform=other','/admin/app.js?x=1','/admin/../admin','/complete?token=private']) assert.equal((await f.send({path,method:'GET'})).status,404);
+  for(const query of ['outcome=connected&platform_id=platform','outcome=error&error_code=oauth_denied']) {
+    const complete=await f.send({path:'/complete?'+query,method:'GET'});assert.equal(complete.status,200);
+    assert.equal(complete.body,(await f.send({path:'/complete',method:'GET'})).body);
+  }
+  for(const query of ['outcome=connected&outcome=error','outcome=other','outcome=connected&platform_id=%FF','outcome=connected&token=secret']) assert.equal((await f.send({path:'/complete?'+query,method:'GET'})).status,404);
+  assert.equal(f.peer.seen.length,0);assert.equal(f.starts.length,0);assert.equal(f.callbacks.length,0);
+});
+
 test('LTI routes are opt-in and share the bounded HTTPS dispatcher without Gateway privilege impersonation',async t=>{
   const absent=await fixture(t);
   assert.equal((await absent.send({path:ltiLogin,method:'GET'})).status,404);

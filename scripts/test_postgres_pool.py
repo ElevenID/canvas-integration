@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -19,6 +20,9 @@ PG_IMAGE='postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b
 BAO_IMAGE='quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878'
 
 def main():
+    arguments=sys.argv[1:]
+    if arguments and (len(arguments)!=2 or arguments[0]!='--operator-browser-tests' or not Path(arguments[1]).is_absolute()):
+        raise RuntimeError('unsupported physical contract arguments')
     suffix=uuid.uuid4().hex
     pg='canvas-pg-driver-'+suffix
     bao='canvas-pg-key-'+suffix
@@ -98,6 +102,8 @@ def main():
             def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage,pg],check=True,cwd=ROOT,env=env,timeout=30)
             node('initial')
             subprocess.run(['node',str(ROOT/'test/connector-oauth-runtime-contract.mjs'),str(fixture),pg,bao],check=True,cwd=ROOT,env=env,timeout=60)
+            if arguments:
+                subprocess.run(['node',str(ROOT/'test/operator-browser-fixture.mjs'),str(fixture),pg,arguments[1]],check=True,cwd=ROOT,env=env,timeout=180)
             subprocess.run(['node',str(ROOT/'test/connector-worker-runtime-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=90)
             subprocess.run(['node',str(ROOT/'test/observation-outbox-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=60)
             subprocess.run(['node',str(ROOT/'test/rest-capture-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=60)

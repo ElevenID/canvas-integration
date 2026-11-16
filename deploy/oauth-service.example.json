@@ -17,12 +17,12 @@
   },
   "canvas": {},
   "gatewayAuthentication": {
-    "gatewayOrigin": "https://gateway.example.org",
+    "gatewayOrigin": "https://marty.example.org",
     "sessionCookieName": "__Host-marty_session"
   },
   "http": {
-    "publicOrigin": "https://connector.example.org",
-    "completionUrl": "https://connector.example.org/complete",
+    "publicOrigin": "https://marty.example.org",
+    "completionUrl": "https://marty.example.org/complete",
     "host": "0.0.0.0",
     "port": 8443,
     "maxConcurrentRequests": 4,

@@ -10,6 +10,7 @@ import { createCaptureRouteAdminHandler } from './capture-route-admin-http.mjs';
 import { createLtiLaunchHandler } from './lti-launch-http.mjs';
 import { createLtiRegistrationAdminHandler } from './lti-registration-admin-http.mjs';
 import { createLtiProviderIdentityHandler } from './lti-provider-identity-http.mjs';
+import { operatorPage, operatorScript, operatorStyles, operatorCompletionPage } from './operator-pages.mjs';
 
 const invalid = () => new Error('invalid_connector_service_configuration');
 const unavailable = () => new Error('connector_service_unavailable');
@@ -71,6 +72,39 @@ export function createConnectorHttpsService(configuration = {}) {
     const hosts = request.rawHeaders.filter((_, i) => i % 2 === 1 && request.rawHeaders[i - 1].toLowerCase() === 'host');
     if (hosts.length !== 1 || hosts[0] !== origin.host) return finish(response, 421);
     if (typeof request.url !== 'string' || Buffer.byteLength(request.url) > 8192) return finish(response, 414);
+    const assets = {
+      '/admin': ['text/html; charset=utf-8', () => operatorPage([
+        ...(platforms ? ['platforms'] : []), ...(clients ? ['clients'] : []), ...(connections ? ['connections'] : []),
+        ...(captures ? ['captures'] : []), ...(ltiAdmin ? ['lti'] : []), ...(recovery ? ['recovery'] : [])])],
+      '/admin/app.js': ['text/javascript; charset=utf-8', () => operatorScript],
+      '/admin/styles.css': ['text/css; charset=utf-8', () => operatorStyles],
+      '/complete': ['text/html; charset=utf-8', () => operatorCompletionPage],
+    };
+    let assetPath=request.url;
+    if(assetPath.startsWith('/complete?')) {
+      let valid=true;const seen=new Set();
+      try {
+        const query=assetPath.slice('/complete?'.length);decodeURIComponent(query.replaceAll('+',' '));
+        for(const [name,value] of new URLSearchParams(query)) {
+          if(seen.has(name) || !['outcome','platform_id','error_code'].includes(name)) valid=false;
+          seen.add(name);
+          if(name==='outcome' && !['connected','error'].includes(value)) valid=false;
+          if(name==='platform_id' && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)) valid=false;
+          if(name==='error_code' && !/^oauth_[a-z_]{1,80}$/.test(value)) valid=false;
+        }
+      } catch {valid=false;}
+      if(valid && seen.has('outcome')) assetPath='/complete';
+    }
+    if(Object.hasOwn(assets, assetPath)) {
+      if(request.method!=='GET') return finish(response,405);
+      const [type,render]=assets[assetPath], body=render();
+      response.writeHead(200, {'Content-Type':type,'Content-Length':Buffer.byteLength(body),'Cache-Control':'no-store',
+        'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
+        'Cross-Origin-Resource-Policy':'same-origin','Cross-Origin-Opener-Policy':'same-origin',
+        'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        Connection:'close'});
+      response.end(body);return;
+    }
     if(ltiIdentity && /^\/lti\/registrations\/[a-f0-9-]+\/provider-identity$/.test(request.url)) return ltiIdentity(request,response);
     if(lti && request.url.startsWith('/lti/registrations/')) return lti(request,response);
     if(ltiAdmin && /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/lti\/registrations\//.test(request.url)) return ltiAdmin(request,response);

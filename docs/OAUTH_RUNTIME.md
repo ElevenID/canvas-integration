@@ -107,7 +107,10 @@ ciphertext publication after disconnect, shutdown waiting, replay without anothe
 exchange, revoked permission, quota before Gateway calls, missing policy and
 database/key custody failures. Fixtures never consume an existing database.
 
-Production credential agents, owner migrations/role approval, deployment ingress
-and network policy, worker scheduling, operator UI, LTI/AGS/NRPS, initial-exchange
-uncertainty recovery and actual Canvas-to-Gateway-to-OB3-wallet qualification remain
-unfinished. The public Common Gateway remains the sole connector-to-Marty boundary.
+The [operator console](OPERATOR_CONSOLE.md) composes the existing administration
+APIs; [private worker cadence](CAPTURE_SCHEDULING.md) can allocate automatic
+captures. Production credential agents, owner migrations/role approval, deployed
+ingress/cookie/network policy, remaining LTI services/AGS/NRPS, provider-uncertainty
+resolution and retention, canonical learner/application association and actual
+Canvas-to-Gateway-to-OB3-wallet qualification remain unfinished. The public Common
+Gateway remains the sole connector-to-Marty boundary.
