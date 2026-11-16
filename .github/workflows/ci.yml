@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
+      - name: Install locked connector PostgreSQL driver
+        run: npm ci --ignore-scripts --omit=optional --no-audit --no-fund
       - name: Install isolated pinned browser tooling
         shell: bash
         run: |
@@ -33,6 +35,9 @@ jobs:
       - name: Test real Chromium against owned PostgreSQL and HTTPS peers
         shell: bash
         run: python3 scripts/test_lti_state.py --browser-tests "$RUNNER_TEMP/canvas-lti-browser-tools/node_modules/playwright/index.mjs"
+      - name: Test operator browser with actual restricted PostgreSQL and OpenBao
+        shell: bash
+        run: python3 scripts/test_postgres_pool.py --operator-browser-tests "$RUNNER_TEMP/canvas-lti-browser-tools/node_modules/playwright/index.mjs"
   lti-state:
     name: Connector LTI state and browser-proof protocol
     runs-on: ubuntu-latest

@@ -10,6 +10,7 @@ import { createCaptureRouteAdminHandler } from './capture-route-admin-http.mjs';
 import { createLtiLaunchHandler } from './lti-launch-http.mjs';
 import { createLtiRegistrationAdminHandler } from './lti-registration-admin-http.mjs';
 import { createLtiProviderIdentityHandler } from './lti-provider-identity-http.mjs';
+import { operatorPage, operatorScript, operatorStyles, operatorCompletionPage } from './operator-pages.mjs';
 
 const invalid = () => new Error('invalid_connector_service_configuration');
 const unavailable = () => new Error('connector_service_unavailable');
@@ -71,6 +72,56 @@ export function createConnectorHttpsService(configuration = {}) {
     const hosts = request.rawHeaders.filter((_, i) => i % 2 === 1 && request.rawHeaders[i - 1].toLowerCase() === 'host');
     if (hosts.length !== 1 || hosts[0] !== origin.host) return finish(response, 421);
     if (typeof request.url !== 'string' || Buffer.byteLength(request.url) > 8192) return finish(response, 414);
+    if(request.url==='/admin/session') {
+      if(request.method!=='POST') return finish(response,405);
+      const count=name=>request.rawHeaders.filter((_,i)=>i%2===0 && request.rawHeaders[i].toLowerCase()===name).length;
+      if(count('origin')!==1 || request.headers.origin!==publicOrigin) return finish(response,403);
+      if(count('content-type')!==1 || !/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type']??'')) return finish(response,415);
+      let identity;
+      try {
+        if(await rateLimiter.consume(request.socket.remoteAddress)!==true) return finish(response,429);
+        for await(const chunk of request) if(chunk.length) return finish(response,400);
+        identity=await authenticateAndAuthorize(request,{platformId:'operator-console',action:'integration-connector:edit'});
+      }catch{return finish(response,503);}
+      if(!identity) return finish(response,401);
+      if(identity.authorized!==true || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(identity.organizationId??'')) return finish(response,403);
+      const body=JSON.stringify({organizationId:identity.organizationId});
+      response.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body),'Cache-Control':'no-store',
+        'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff',Connection:'close'});response.end(body);return;
+    }
+    const assets = {
+      '/admin': ['text/html; charset=utf-8', () => operatorPage([
+        ...(platforms ? ['platforms'] : []), ...(clients ? ['clients'] : []), ...(connections ? ['connections'] : []),
+        ...(captures ? ['captures'] : []), ...(ltiAdmin ? ['lti'] : []), ...(recovery ? ['recovery'] : [])])],
+      '/admin/app.js': ['text/javascript; charset=utf-8', () => operatorScript],
+      '/admin/styles.css': ['text/css; charset=utf-8', () => operatorStyles],
+      '/complete': ['text/html; charset=utf-8', () => operatorCompletionPage],
+    };
+    let assetPath=request.url;
+    if(assetPath.startsWith('/complete?')) {
+      let valid=true;const seen=new Set();
+      try {
+        const query=assetPath.slice('/complete?'.length);decodeURIComponent(query.replaceAll('+',' '));
+        for(const [name,value] of new URLSearchParams(query)) {
+          if(seen.has(name) || !['outcome','platform_id','error_code'].includes(name)) valid=false;
+          seen.add(name);
+          if(name==='outcome' && !['connected','error'].includes(value)) valid=false;
+          if(name==='platform_id' && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)) valid=false;
+          if(name==='error_code' && !/^oauth_[a-z_]{1,80}$/.test(value)) valid=false;
+        }
+      } catch {valid=false;}
+      if(valid && seen.has('outcome')) assetPath='/complete';
+    }
+    if(Object.hasOwn(assets, assetPath)) {
+      if(request.method!=='GET') return finish(response,405);
+      const [type,render]=assets[assetPath], body=render();
+      response.writeHead(200, {'Content-Type':type,'Content-Length':Buffer.byteLength(body),'Cache-Control':'no-store',
+        'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
+        'Cross-Origin-Resource-Policy':'same-origin','Cross-Origin-Opener-Policy':'same-origin',
+        'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        Connection:'close'});
+      response.end(body);return;
+    }
     if(ltiIdentity && /^\/lti\/registrations\/[a-f0-9-]+\/provider-identity$/.test(request.url)) return ltiIdentity(request,response);
     if(lti && request.url.startsWith('/lti/registrations/')) return lti(request,response);
     if(ltiAdmin && /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/lti\/registrations\//.test(request.url)) return ltiAdmin(request,response);

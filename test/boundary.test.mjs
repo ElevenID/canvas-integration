@@ -11,7 +11,7 @@ test('reviewed runtime passes the boundary gate', async () => {
   const result = await run('python3', ['scripts/check_boundary.py']);
   assert.match(result.stdout, /Boundary check passed/);
 });
-for (const mutation of ['internal-package', 'alternate-http', 'dynamic-network', 'dependency', 'browser-export', 'extra-module', 'tls-bypass', 'inbound-outbound', 'inbound-host', 'inbound-shutdown']) {
+for (const mutation of ['internal-package', 'alternate-http', 'dynamic-network', 'dependency', 'browser-export', 'extra-module', 'tls-bypass', 'inbound-outbound', 'inbound-host', 'inbound-shutdown','operator-extra-transport','operator-destination']) {
   test(`boundary gate rejects regression: ${mutation}`, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'canvas-boundary-'));
     try {
@@ -30,6 +30,12 @@ for (const mutation of ['internal-package', 'alternate-http', 'dynamic-network',
         if (mutation === 'inbound-host') source = source.replace('hosts[0] !== origin.host', 'false');
         if (mutation === 'inbound-shutdown') source = source.replace('await Promise.allSettled([...inFlight])', 'void 0');
         await writeFile(path, source);
+      }
+      if(mutation.startsWith('operator-')) {
+        const path=join(directory,'src/operator-pages.mjs');let source=await readFile(path,'utf8');
+        if(mutation==='operator-extra-transport') source+='\nfetch("https://private.internal/escape");\n';
+        else source=source.replace('window.fetch(path,','window.fetch("https://private.internal/escape",');
+        await writeFile(path,source);
       }
       if (mutation === 'tls-bypass') {
         const client = join(directory, 'src/gateway-client.mjs');

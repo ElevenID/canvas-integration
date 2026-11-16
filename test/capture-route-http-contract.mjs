@@ -62,14 +62,19 @@ export async function captureRouteHttpContract({send,address,organizationId,canv
   for(const name of ['organization_id','actor_id','subject_id','verification']) assert.equal((await call('create',{...create,[name]:'forged'})).status,400);
   assert.equal((await call('schedule',{...mutation(3),requirement:'forged'})).status,400);
   // Eight actual HTTPS requests preserve one original create intent and actor.
-  const concurrent={...create,operation_id:randomUUID(),binding_id:'managed-concurrent-binding'};
-  bindings.set(concurrent.binding_id,{...record,id:concurrent.binding_id});
-  const requests=await Promise.all(Array.from({length:8},()=>send(address,{path:'/platforms/managed-platform/capture-routes/concurrent/create',body:new URLSearchParams(concurrent).toString()}).response));
-  for(const [index,response] of requests.entries()) {
-    assert.equal(response.status,200,`concurrent capture create${index}; statuses=${requests.map(value=>value.status).join(',')}`);
-    assert.deepEqual(JSON.parse(response.body),JSON.parse(requests[0].body));
+  const rounds=Number(process.env.CANVAS_TEST_CAPTURE_STRESS_ROUNDS??'1');
+  assert.ok(Number.isInteger(rounds)&&rounds>=1&&rounds<=50,'bounded local capture stress rounds');
+  for(let round=0;round<rounds;round++) {
+    if(round) owner("UPDATE canvas_connector.oauth_http_limit SET hits=0,window_started_at=clock_timestamp()-interval '1 second';");
+    const concurrent={...create,operation_id:randomUUID(),binding_id:'managed-concurrent-binding-'+round};
+    bindings.set(concurrent.binding_id,{...record,id:concurrent.binding_id});
+    const requests=await Promise.all(Array.from({length:8},()=>send(address,{path:'/platforms/managed-platform/capture-routes/concurrent-'+round+'/create',body:new URLSearchParams(concurrent).toString()}).response));
+    for(const [index,response] of requests.entries()) {
+      assert.equal(response.status,200,`concurrent capture create round${round} index${index}; statuses=${requests.map(value=>value.status).join(',')}; types=${requests.map(value=>value.headers['content-type']??'none').join(',')}`);
+      assert.deepEqual(JSON.parse(response.body),JSON.parse(requests[0].body));
+    }
+    assert.equal((await query('SELECT count(*)::integer AS n FROM canvas_connector.rest_route_operation_audit WHERE organization_id=$1 AND operation_id=$2',[organizationId,concurrent.operation_id])).rows[0].n,1);
   }
-  assert.equal((await query('SELECT count(*)::integer AS n FROM canvas_connector.rest_route_operation_audit WHERE organization_id=$1 AND operation_id=$2',[organizationId,concurrent.operation_id])).rows[0].n,1);
   assert.ok(gateway.seen.every(item=>item.headers.cookie==='session=abcdefghijklmnop' && !item.headers['x-api-key'] && !item.headers.authorization));
   for(const item of gateway.seen.filter(item=>item.method==='POST')) assert.equal(item.headers.origin,'https://localhost');
   owner('UPDATE canvas_connector.oauth_http_limit SET hits=0,window_started_at=clock_timestamp();');

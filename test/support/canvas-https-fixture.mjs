@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-export async function httpsFixture() {
+export async function httpsFixture({ ipAddressSan = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'canvas-rest-'));
   const run = promisify(execFile);
   try {
     await run('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes',
       '-keyout', join(directory, 'key.pem'), '-out', join(directory, 'cert.pem'), '-days', '1',
-      '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost']);
+      '-subj', '/CN=localhost', '-addext', ipAddressSan ? 'subjectAltName=DNS:localhost,IP:127.0.0.1' : 'subjectAltName=DNS:localhost']);
     const ca = await readFile(join(directory, 'cert.pem'), 'utf8');
     const key = await readFile(join(directory, 'key.pem'));
     const seen = [];

@@ -1,13 +1,13 @@
 # Connector-owned Canvas provider identity
 
-This branch is implementing the provider-only opaque-to-numeric identity mapping
-currently retained in Core's Canvas launch modules. Migration014, the signed
+The connector owns a provider-only opaque-to-numeric identity observation registry.
+The old Core launch modules remain pending qualified retirement. Migration014, the signed
 claim decoder, production repository and bounded HTTP adapter are composed by
 the explicitly enabled LTI runtime. The owner must install the migration and
 selected runtime grants; startup checks the additional capabilities and guards.
 There is no runtime DDL, grants, in-memory fallback or replacement transport hook.
-Independent review, exact CI and canonical Gateway learner association remain
-required before this child can replace the existing Core flow.
+Canonical Gateway learner association and deployed replacement qualification
+remain required before retiring the existing Core flow.
 
 Only `canvas_user_id` inside the verified LTI custom claim can supply a numeric
 Canvas identifier. It is normalized with the same unsigned64-bit identifier
@@ -55,10 +55,11 @@ Quarantine suppresses that ID even when the historical receipt said linked.
 This accessor does not authorize a REST read, a Core binding or a Marty action.
 Current Gateway authority and the existing approved capture scope remain required.
 
-Root validation includes679 pinned Node22 tests, actual PostgreSQL16 with all14
+Validation includes pinned Node22 tests, actual PostgreSQL16 with all required
 migrations and a constrained role, final expiry/configuration rollback and lost
 reply recovery. The separate physical driver suite exercises the actual TLS
 PostgreSQL runtime, synthetic Gateway session and signed Canvas JWT through the
 new endpoint, including private response fields and closure. The Windows run
-uses explicit synthetic credential providers; Linux CLI and exact candidate CI
-remain separate qualification. Core provider retirement is not claimed.
+uses explicit synthetic credential providers. Linux CLI and Chromium protocol
+checks passed for merged PR27; these remain separate from live deployment
+qualification. Core provider retirement is not claimed.

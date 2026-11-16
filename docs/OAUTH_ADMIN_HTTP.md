@@ -33,6 +33,12 @@ session-cookie name. Transport uses a direct verified TLS agent, fixed paths,
 64 KiB response bounds, redirect rejection and one total deadline across both
 requests. It forwards no other cookies, API keys, caller headers or query data.
 Duplicate session cookies/origins are rejected. It never calls private core APIs.
+The operator console additionally supplies an optional
+`X-Connector-Organization-Intent` UUID. A single canonical value must match the
+organization derived from the current Gateway session on every authentication
+call, before permission lookup. Missing values preserve existing API behavior;
+malformed, duplicate or mismatching values fail closed. This is an intent
+precondition, never tenant authority, and is not forwarded to Gateway.
 The origin requirement provides the endpoint's same-origin CSRF policy.
 Deploy the connector endpoint where the browser's existing session cookie is
 available under the established login/reverse-proxy setup; this module does not

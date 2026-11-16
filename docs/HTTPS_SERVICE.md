@@ -32,8 +32,14 @@ The listener does not provide a proxy-trust mode. A proxy deployment must preser
 the fixed public Host and enforce its own client rate limits; it must not substitute
 request-body organization IDs for the Gateway session's organization.
 
-Routes are only `POST /platforms/{platform_id}/oauth/start` and
-`GET /oauth/callback`. Callback browser proof, one-time lifecycle state,
+The listener includes the public static [operator console](OPERATOR_CONSOLE.md)
+at `GET /admin`, its fixed script/style assets and a neutral `GET /complete`
+return page. Completion query parameters are bounded/validated but never reflected
+or accepted as proof of current connection status. Optional composed adapters
+also mount platform, connection, developer-key, capture-route, LTI and recovery
+administration. The original OAuth routes remain
+`POST /platforms/{platform_id}/oauth/start` and `GET /oauth/callback`.
+Callback browser proof, one-time lifecycle state,
 same-origin administration, current Gateway permission and bounded form/query
 decoding remain in the existing adapters. No health endpoint claims database
 readiness. Unknown paths, authority-bearing absolute targets and alternate Host

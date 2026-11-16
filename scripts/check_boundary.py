@@ -42,7 +42,8 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/platform-admin.mjs': {'./canvas-rest-network.mjs'},
  'src/oauth-client-contract.mjs': set(),
  'src/oauth-client-admin.mjs': {'./oauth-client-contract.mjs'},
- 'src/connector-https-service.mjs': {'node:https', './oauth-admin-http.mjs', './oauth-callback-http.mjs','./oauth-attempt-recovery.mjs','./connection-admin.mjs','./platform-admin.mjs','./oauth-client-admin.mjs','./capture-route-admin-http.mjs','./lti-launch-http.mjs','./lti-registration-admin-http.mjs','./lti-provider-identity-http.mjs'},
+ 'src/connector-https-service.mjs': {'node:https', './oauth-admin-http.mjs', './oauth-callback-http.mjs','./oauth-attempt-recovery.mjs','./connection-admin.mjs','./platform-admin.mjs','./oauth-client-admin.mjs','./capture-route-admin-http.mjs','./lti-launch-http.mjs','./lti-registration-admin-http.mjs','./lti-provider-identity-http.mjs','./operator-pages.mjs'},
+ 'src/operator-pages.mjs': set(),
  'src/connector-oauth-runtime.mjs': {'./postgres-pool.mjs', './postgres-repository.mjs', './openbao-key-provider.mjs',
    './encrypted-vault.mjs', './canvas-oauth-provider.mjs', './canvas-oauth.mjs', './gateway-admin-auth.mjs',
    './connector-https-service.mjs', './oauth-http-rate-limiter.mjs','./oauth-attempt-recovery.mjs','./connection-admin.mjs','./platform-admin.mjs','./oauth-client-admin.mjs','./capture-route-admin-store.mjs','./gateway-binding-reader.mjs','./lti-launch-repository.mjs','./lti-launch-lifecycle.mjs','./lti-registration-admin-store.mjs','./lti-runtime-preflight.mjs','./lti-provider-identity-store.mjs'},
@@ -90,7 +91,14 @@ def audit(root: Path) -> list[str]:
         source = path.read_text(encoding="utf-8")
         if set(IMPORT.findall(source)) != IMPORTS.get(name, set()):
             errors.append(f"unreviewed import: {name}")
-        if DYNAMIC.search(source):
+        transport_source = source
+        if name == 'src/operator-pages.mjs':
+            # The serialized browser console has one explicitly reviewed,
+            # same-origin, fixed-path fetch site. It never executes in Node.
+            if source.count('window.fetch(path,') != 1:
+                errors.append('operator browser transport differs from reviewed boundary')
+            transport_source = source.replace('window.fetch(path,', 'browser_transport(path,')
+        if DYNAMIC.search(transport_source):
             errors.append(f"dynamic code or alternate transport: {name}")
         # New import syntaxes require an explicit review of this gate.
         without_imports = IMPORT.sub("", source)
