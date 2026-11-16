@@ -57,6 +57,23 @@ uses synthetic data and removes its own container. Tests cover expiry, replay,
 configuration fencing, immutable tenant identity, reference separation, durable
 revocation and eight concurrent consumers with exactly one state winner.
 
-This is the storage contract, not a complete production repository adapter.
-The JavaScript repository mapping, encrypted vault, administrative operations,
+The server-only `./postgres-repository` export now maps the existing OAuth
+lifecycle repository methods to parameterized statements against this schema.
+Supply a dedicated connector-owned PostgreSQL **autocommit pool**, with a
+`query(sql, values)` API returning parsed PostgreSQL rows (booleans, float8
+numbers and text arrays). Never supply a transaction-bound client: consumption
+must commit before the lifecycle starts the provider exchange. There is no
+in-memory, environment-based or plaintext fallback. Configure the driver pool
+with verified TLS, connection/query deadlines and least-privilege connector
+credentials. This module deliberately does not instantiate a database driver.
+
+Publication errors remain exceptions with fixed redacted messages, including
+uncertain commit acknowledgments. Only explicit zero-row conflicts return
+false; the OAuth lifecycle preserves vault references when publication throws.
+The separate oauth_status table tracks pending/connected state without
+incrementing platform configuration versions. Repository integration contracts
+execute the actual parameterized statements through a test-only psql bridge;
+that bridge is not a production driver or transport implementation.
+
+Encrypted vault, administrative operations, driver/deployment wiring,
 refresh/revocation workers and deployed acceptance tests remain required.

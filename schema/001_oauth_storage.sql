@@ -47,6 +47,33 @@ CREATE TABLE canvas_connector.authorizations (
 );
 CREATE INDEX authorizations_expiry ON canvas_connector.authorizations(expires_at);
 
+CREATE TABLE canvas_connector.oauth_status (
+    organization_id text NOT NULL,
+    platform_id text NOT NULL,
+    status text NOT NULL CHECK (status IN ('pending', 'connected', 'reauthorization_required')),
+    authorization_hash text CHECK (authorization_hash ~ '^[a-f0-9]{64}$'),
+    PRIMARY KEY (organization_id, platform_id),
+    FOREIGN KEY (organization_id, platform_id) REFERENCES canvas_connector.platforms(organization_id,id)
+);
+
+CREATE FUNCTION canvas_connector.mark_authorization_pending(org text, platform text, version bigint, hash text)
+RETURNS boolean LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM 1 FROM canvas_connector.platforms
+     WHERE organization_id=org AND id=platform AND config_version=version AND enabled AND NOT archived
+     FOR UPDATE;
+    IF NOT FOUND THEN RETURN false; END IF;
+    PERFORM 1 FROM canvas_connector.authorizations
+     WHERE state_hash=hash AND organization_id=org AND platform_id=platform
+       AND platform_config_version=version AND expires_at > clock_timestamp();
+    IF NOT FOUND THEN RETURN false; END IF;
+    INSERT INTO canvas_connector.oauth_status VALUES (org,platform,'pending',hash)
+    ON CONFLICT (organization_id,platform_id)
+    DO UPDATE SET status='pending', authorization_hash=EXCLUDED.authorization_hash;
+    RETURN true;
+END;
+$$;
+
 -- DELETE RETURNING consumes the state atomically across concurrent callbacks.
 -- Expiry comes from the database clock, not an untrusted callback parameter.
 CREATE FUNCTION canvas_connector.consume_authorization(requested_hash text)

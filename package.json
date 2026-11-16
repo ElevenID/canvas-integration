@@ -34,6 +34,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/canvas-oauth-provider.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./postgres-repository": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/postgres-repository.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
