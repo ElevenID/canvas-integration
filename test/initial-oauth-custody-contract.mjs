@@ -118,7 +118,10 @@ export async function initialOAuthCustodyContract(pool,options={}) {
     if(scenario==='revision') await query('UPDATE canvas_connector.platforms SET canvas_origin=$2 WHERE organization_id=$1',[a.organizationId,'https://new-canvas.example.test']);
     if(scenario==='reconciliation') assert.equal(await repo.requireAuthorizationReconciliation(a.authorizationId,a.organizationId,a.platformId),true);
     if(scenario==='new-pending') await query('UPDATE canvas_connector.oauth_status SET authorization_hash=$2 WHERE organization_id=$1',[a.organizationId,'f'.repeat(64)]);
-    const refs=await vault.stageAuthorizationResult(a,bundle,scenario==='expired-token'?Date.now()-1000:null);
+    // Publication uses the database clock; avoid assuming the fixture VM and
+    // host clocks agree closely enough for a one-second negative deadline.
+    const expiry=scenario==='expired-token'?Number((await query("SELECT floor(extract(epoch FROM clock_timestamp()-interval '1 second')*1000)::float8 AS expired")).rows[0].expired):null;
+    const refs=await vault.stageAuthorizationResult(a,bundle,expiry);
     if(scenario==='revoked-client') await query('UPDATE canvas_connector.secrets SET enabled=false WHERE organization_id=$1 AND reference=$2',[a.organizationId,a.clientSecretRef]);
     assert.equal(await publish(a),false);
     assert.equal(await vault.get(a.organizationId,refs.accessTokenRef),bundle.accessToken);

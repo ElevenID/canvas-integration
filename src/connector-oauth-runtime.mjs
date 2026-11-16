@@ -14,6 +14,11 @@ import { createPlatformAdminStore } from './platform-admin.mjs';
 import { createOAuthClientStore } from './oauth-client-admin.mjs';
 import { createCaptureRouteAdminStore } from './capture-route-admin-store.mjs';
 import { createGatewayBindingReader } from './gateway-binding-reader.mjs';
+import { createLtiLaunchRepository } from './lti-launch-repository.mjs';
+import { createLtiLaunchLifecycle } from './lti-launch-lifecycle.mjs';
+import { createLtiRegistrationAdminStore } from './lti-registration-admin-store.mjs';
+import { preflightLtiRuntime } from './lti-runtime-preflight.mjs';
+import { createLtiProviderIdentityStore } from './lti-provider-identity-store.mjs';
 
 const unavailable = () => new Error('connector_oauth_runtime_unavailable');
 function fields(value, allowed) {
@@ -25,8 +30,9 @@ function fields(value, allowed) {
 export async function createConnectorOAuthRuntime(configuration) {
   let pool, service;
   try {
-    fields(configuration, ['database', 'keyCustody', 'canvas', 'gatewayAuthentication', 'http']);
-    const { database, keyCustody, canvas, gatewayAuthentication, http } = configuration;
+    fields(configuration, ['database', 'keyCustody', 'canvas', 'gatewayAuthentication', 'http', 'lti']);
+    const { database, keyCustody, canvas, gatewayAuthentication, http, lti } = configuration;
+    if (lti !== undefined) fields(lti, ['selfManagedOriginAllowlist','allowedPrivateAddresses','ca','timeoutMs']);
     fields(keyCustody, ['openbaoOrigin', 'mount', 'keyPath', 'keyNamespace', 'tokenProvider', 'ca', 'timeoutMs']);
     fields(gatewayAuthentication, ['gatewayOrigin', 'sessionCookieName', 'ca', 'timeoutMs']);
     fields(http, ['publicOrigin', 'completionUrl', 'tls', 'host', 'port', 'maxConcurrentRequests']);
@@ -39,6 +45,12 @@ export async function createConnectorOAuthRuntime(configuration) {
     const lifecycle = createCanvasOAuthLifecycle({ publicOrigin: http.publicOrigin,
       completionUrl: http.completionUrl, repository, secretVault, provider,requireConfiguredClient:true });
     service = createConnectorHttpsService({ ...http, lifecycle, authenticateAndAuthorize,
+      ...(lti === undefined ? {} : {
+        ltiLifecycle:createLtiLaunchLifecycle({repository:createLtiLaunchRepository(pool),publicOrigin:http.publicOrigin,platformPolicy:lti}),
+        ltiRegistrationStore:createLtiRegistrationAdminStore(pool),
+        ltiIdentityStore:createLtiProviderIdentityStore(pool),
+        ltiSelfManagedOriginAllowlist:lti.selfManagedOriginAllowlist??[],
+      }),
       recoveryStore:createOAuthAttemptRecoveryStore(pool),
       connectionStore:createConnectionAdminStore(pool),
       platformStore:createPlatformAdminStore(pool),
@@ -122,6 +134,7 @@ export async function createConnectorOAuthRuntime(configuration) {
         AND has_function_privilege(current_user,'canvas_connector.stage_authorization_result(text,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamp with time zone)','EXECUTE')
         AND has_function_privilege(current_user,'canvas_connector.mark_authorization_pending(text,text,bigint,text)','EXECUTE') AS ready`);
       if (result?.rows?.length !== 1 || result.rows[0].ready !== true) throw unavailable();
+      if (lti !== undefined) await preflightLtiRuntime(pool);
       const policy = await pool.query('SELECT request_limit,window_ms,hits FROM canvas_connector.oauth_http_limit WHERE singleton=true');
       if (policy?.rows?.length !== 1 || !Number.isInteger(policy.rows[0].request_limit)
           || policy.rows[0].request_limit < 1 || policy.rows[0].request_limit > 1000
