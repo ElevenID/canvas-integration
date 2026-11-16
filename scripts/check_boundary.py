@@ -17,6 +17,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/browser-denied.mjs': set(),
  'src/canvas-oauth-provider.mjs': {'./canvas-rest-network.mjs', 'node:https'},
  'src/canvas-lti-launch.mjs': {'node:crypto', './private-json.mjs'},
+ 'src/canvas-lti-platform.mjs': {'node:https', './canvas-rest-network.mjs', './canvas-rest-contract.mjs', './canvas-lti-launch.mjs'},
  'src/canvas-oauth.mjs': {'./canvas-rest-network.mjs', 'node:crypto', './oauth-browser-binding.mjs'},
  'src/canvas-rest-contract.mjs': set(),
  'src/canvas-rest-network.mjs': {'node:net', './canvas-rest-contract.mjs', 'node:dns/promises'},
@@ -83,7 +84,7 @@ def audit(root: Path) -> list[str]:
         without_imports = IMPORT.sub("", source)
         if re.search(r"^\s*(?:import\s|export\s+.*\bfrom\s)", without_imports, re.MULTILINE):
             errors.append(f"unreviewed module syntax: {name}")
-        if name.startswith(("src/canvas-rest-", "src/canvas-oauth")) and re.search(
+        if name.startswith(("src/canvas-rest-", "src/canvas-oauth", "src/canvas-lti-")) and re.search(
             r"X-API-Key|X-Organization-ID|gatewayOrigin|apiKey|process\s*\.\s*env|/internal/", source
         ):
             errors.append(f"core authority in Canvas provider: {name}")

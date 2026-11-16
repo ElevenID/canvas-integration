@@ -22,8 +22,10 @@ simple-name/URN role aliases are unsupported. These restrictions must be checked
 against real Canvas registrations before deployment.
 
 This primitive is not connected to the HTTPS runtime or exported from the package.
-It does not fetch JWKS, consume a nonce or authenticate a browser. The next adapter
-must own current registration revisions, pinned DNS/TLS discovery, durable expiring
+It does not fetch JWKS, consume a nonce or authenticate a browser. The internal
+[platform reader](LTI_PLATFORM_READER.md) adds server-selected trust profiles and
+fresh pinned DNS/TLS key acquisition. The next stateful adapter must own current
+registration revisions, durable expiring
 login state, browser binding and atomic consume/receipt semantics before enabling
 an endpoint. A successful call alone must never create a session or evidence.
 Canvas `sub` remains a provider identifier; learner association requires a separate
