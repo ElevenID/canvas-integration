@@ -123,5 +123,5 @@ Positive Linux CLI and signal-drain contracts passed; deployment qualification
 remains open.
 
 The [initial OAuth custody adapters](docs/INITIAL_OAUTH_CUSTODY.md) persist
-exchange attempts and atomically stage encrypted token references. Migrating the
-actual callback and providing audited operator recovery remain required.
+exchange attempts and atomically stage encrypted token references in the actual
+callback. Audited operator recovery and production qualification remain required.

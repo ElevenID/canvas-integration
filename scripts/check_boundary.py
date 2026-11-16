@@ -141,11 +141,13 @@ def audit(root: Path) -> list[str]:
         if invariant not in oauth:
             errors.append("Canvas OAuth transport invariant missing")
     lifecycle = (root / "src/canvas-oauth.mjs").read_text()
-    for invariant in ("browserBindingHash", "matchesOAuthBrowserBindingHash", "createHash", "stateHash: stateHash(state)", "repository.consumeAuthorization(stateHash(input.state)",
+    for invariant in ("browserBindingHash", "matchesOAuthBrowserBindingHash", "createHash", "stateHash: stateHash(state)", "repository.consumeAuthorizationAttempt(stateHash(input.state)",
                       "cancelAuthorization", "clientSecretRef", "accessTokenRef",
-                      "publishConnection", "completionLocation"):
+                      "publishAuthorizationConnection", "stageAuthorizationResult", "beginAuthorizationExchange", "completionLocation"):
         if invariant not in lifecycle:
             errors.append("Canvas OAuth lifecycle invariant missing")
+    if re.search(r"vault\s*\.\s*(put|delete)\s*\(|provider\s*\.\s*revoke\s*\(|repository\s*\.\s*publishConnection\s*\(", lifecycle):
+        errors.append("OAuth callback bypasses atomic custody or discards uncertain credentials")
     capture = (root / "src/rest-capture.mjs").read_text()
     for invariant in ("canvas_connector.schedule_rest_capture", "canvas_connector.complete_rest_capture",
                       "job?.organizationId!==organizationId", "job.producerRef!==producerRef",

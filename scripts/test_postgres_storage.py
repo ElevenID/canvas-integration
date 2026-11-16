@@ -37,6 +37,7 @@ def main():
             raise RuntimeError('disposable PostgreSQL failed readiness')
         sql((ROOT / 'schema/001_oauth_storage.sql').read_text(encoding='utf-8'))
         sql((ROOT / 'schema/005_initial_oauth_custody.sql').read_text(encoding='utf-8'))
+        sql((ROOT / 'schema/006_secret_lock_privilege.sql').read_text(encoding='utf-8'))
         sql((ROOT / 'test/postgres-storage.sql').read_text(encoding='utf-8'))
         subprocess.run(['node', str(ROOT / 'test/postgres-repository-contract.mjs'), name], check=True)
         sql("""INSERT INTO canvas_connector.authorizations

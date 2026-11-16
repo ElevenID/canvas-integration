@@ -201,11 +201,17 @@ try {
     GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_oauth_http;
     GRANT USAGE ON SCHEMA canvas_connector TO canvas_oauth_http;
     GRANT SELECT ON canvas_connector.platforms,canvas_connector.oauth_http_limit TO canvas_oauth_http;
-    GRANT SELECT,INSERT,DELETE ON canvas_connector.secrets,canvas_connector.authorizations TO canvas_oauth_http;
+    GRANT SELECT,INSERT ON canvas_connector.secrets TO canvas_oauth_http;
+    GRANT SELECT,INSERT,DELETE ON canvas_connector.authorizations TO canvas_oauth_http;
+    GRANT SELECT,INSERT,UPDATE ON canvas_connector.authorization_attempts TO canvas_oauth_http;
     GRANT SELECT,INSERT,UPDATE ON canvas_connector.oauth_status,canvas_connector.connections TO canvas_oauth_http;
     GRANT UPDATE(hits,window_started_at) ON canvas_connector.oauth_http_limit TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION canvas_connector.consume_oauth_http_limit(),
-      canvas_connector.consume_authorization(text,text),
+      canvas_connector.consume_authorization_attempt(text,text),
+      canvas_connector.begin_authorization_exchange(text,text,text),
+      canvas_connector.require_authorization_reconciliation(text,text,text),
+      canvas_connector.publish_authorization_connection(text,text,text),
+      canvas_connector.stage_authorization_result(text,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamptz),
       canvas_connector.mark_authorization_pending(text,text,bigint,text),
       canvas_connector.check_connection_configuration() TO canvas_oauth_http;`);
   const httpDatabase = { ...database, user: 'canvas_oauth_http',
@@ -216,6 +222,14 @@ try {
   // UPDATE(id) permits the required row locks. The immutable identity trigger
   // prevents changing id, and no platform definition column is updateable.
   owner('GRANT UPDATE(id) ON canvas_connector.platforms TO canvas_oauth_http;');
+  const missingSecretLockPrivilege = await runtime({ database: httpDatabase });
+  await assert.rejects(missingSecretLockPrivilege.listen(), { message: 'connector_oauth_runtime_unavailable' });
+  owner('GRANT UPDATE(created_at) ON canvas_connector.secrets TO canvas_oauth_http;');
+  owner('ALTER TABLE canvas_connector.secrets DISABLE TRIGGER secret_creation_time;');
+  try {
+    const missingGuard = await runtime({ database: httpDatabase });
+    await assert.rejects(missingGuard.listen(), { message: 'connector_oauth_runtime_unavailable' });
+  } finally { owner('ALTER TABLE canvas_connector.secrets ENABLE TRIGGER secret_creation_time;'); }
   configuration.database = httpDatabase;
   const httpPool = createConnectorPostgresPool(httpDatabase);
   try {
@@ -223,6 +237,9 @@ try {
     await assert.rejects(httpPool.query("UPDATE canvas_connector.platforms SET id='renamed-platform' WHERE id='runtime-platform'"));
     await assert.rejects(httpPool.query('DELETE FROM canvas_connector.platforms'));
     await assert.rejects(httpPool.query('SELECT * FROM canvas_connector.refresh_attempts'));
+    await assert.rejects(httpPool.query('DELETE FROM canvas_connector.secrets'));
+    await assert.rejects(httpPool.query("UPDATE canvas_connector.secrets SET created_at=clock_timestamp()-interval '1 day'"));
+    await assert.rejects(httpPool.query('UPDATE canvas_connector.secrets SET enabled=true'));
     assert.equal((await httpPool.query("SELECT has_schema_privilege(current_user,'canvas_connector','CREATE') AS allowed")).rows[0].allowed, false);
   } finally { await httpPool.close(); }
   const server = fileCustody ? await cliRuntime() : await runtime(); const address = await server.listen();
