@@ -10,6 +10,7 @@ import {createRestCaptureRepository,createCanvasRestCaptureWorker} from './rest-
 import {createObservationOutbox,createObservationDeliveryWorker} from './observation-outbox.mjs';
 import {createObservationSubmitter} from './observation-submit.mjs';
 import {createWorkerLoop} from './worker-loop.mjs';
+import {prepareCaptureSchedule,createCaptureScheduler,preflightCaptureScheduler} from './capture-scheduler.mjs';
 const unavailable=()=>new Error('connector_worker_runtime_unavailable');
 const id=value=>typeof value==='string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
 function fields(value,allowed) {
@@ -18,12 +19,13 @@ function fields(value,allowed) {
 export async function createConnectorWorkerRuntime(configuration) {
   let pool,loop;
   try {
-    fields(configuration,['database','keyCustody','canvas','gateway','refreshTargets','producers','pollIntervalMs']);
-    const {database,keyCustody,canvas,gateway,refreshTargets,producers,pollIntervalMs=1000}=configuration;
+    fields(configuration,['database','keyCustody','canvas','gateway','refreshTargets','producers','pollIntervalMs','captureSchedules']);
+    const {database,keyCustody,canvas,gateway,refreshTargets,producers,pollIntervalMs=1000,captureSchedules=[]}=configuration;
     fields(keyCustody,['openbaoOrigin','mount','keyPath','keyNamespace','tokenProvider','ca','timeoutMs']);
     fields(canvas,['ca','allowedPrivateAddresses','timeoutMs','maxResponseBytes']);
     fields(gateway,['gatewayOrigin','ca','timeoutMs']);
     if(!Array.isArray(refreshTargets) || refreshTargets.length>32 || !Array.isArray(producers) || producers.length>32
+      || !Array.isArray(captureSchedules)||captureSchedules.length>32
       || !Number.isSafeInteger(pollIntervalMs) || pollIntervalMs<100 || pollIntervalMs>60000) throw unavailable();
     const targets=refreshTargets.map(value=>{
       fields(value,['organizationId','platformId']);if(!id(value.organizationId)||!id(value.platformId)) throw unavailable();
@@ -36,6 +38,9 @@ export async function createConnectorWorkerRuntime(configuration) {
     });
     if(new Set(targets.map(v=>v.organizationId+':'+v.platformId)).size!==targets.length
       || new Set(slots.map(v=>v.organizationId+':'+v.producerRef)).size!==slots.length) throw unavailable();
+    const schedules=captureSchedules.map(value=>prepareCaptureSchedule(value));
+    if(new Set(schedules.map(v=>v.organizationId+':'+v.routeId)).size!==schedules.length
+      || schedules.some(schedule=>!slots.some(slot=>slot.organizationId===schedule.organizationId&&slot.producerRef===schedule.producerRef)))throw unavailable();
     const keyProvider=createOpenBaoKeyProvider(keyCustody),provider=createCanvasOAuthProvider(canvas);
     pool=createConnectorPostgresPool(database);
     const repository=createPostgresRepository(pool),secretVault=createEncryptedVault({pool,keyProvider});
@@ -52,6 +57,9 @@ export async function createConnectorWorkerRuntime(configuration) {
         submitter:createObservationSubmitter({...gateway,apiKeyProvider:slot.apiKeyProvider}),
         organizationId:slot.organizationId,producerRef:slot.producerRef});
       tasks.push(()=>capture.runOnce(),()=>delivery.runOnce());
+    }
+    for(const schedule of schedules) {
+      const scheduler=createCaptureScheduler({pool,schedule});tasks.push(()=>scheduler.runOnce());
     }
     loop=createWorkerLoop(tasks,pollIntervalMs);
     const tables=[['secrets','SELECT'],['secrets','DELETE'],['revocation_jobs','SELECT'],['revocation_jobs','UPDATE']];
@@ -95,6 +103,7 @@ export async function createConnectorWorkerRuntime(configuration) {
             AND NOT tgisinternal AND tgenabled IN ('O','A') AND tgtype=19 AND tgqual IS NULL AND tgnargs=0 AND tgattr=''::int2vector) AS ready`);
         if(secretLocks.rows.length!==1 || secretLocks.rows[0].ready!==true) throw unavailable();
       }
+      if(schedules.length)await preflightCaptureScheduler(pool);
       const selected=await keyProvider.current();
       try {if(!Buffer.isBuffer(selected?.key)||selected.key.length!==32) throw unavailable();}
       finally {if(Buffer.isBuffer(selected?.key)) selected.key.fill(0);}

@@ -2,7 +2,7 @@
 // Internal scheduler only: production composition supplies concrete adapters.
 // A timer never releases the capacity held by unfinished adapter work.
 export function createWorkerLoop(tasks,intervalMs) {
-  if(typeof globalThis.window!=='undefined' || !Array.isArray(tasks) || !tasks.length || tasks.length>97
+  if(typeof globalThis.window!=='undefined' || !Array.isArray(tasks) || !tasks.length || tasks.length>129
     || tasks.some(task=>typeof task!=='function') || !Number.isSafeInteger(intervalMs) || intervalMs<1 || intervalMs>60000)
     throw new Error('invalid_connector_worker_loop');
   const selected=tasks.slice();

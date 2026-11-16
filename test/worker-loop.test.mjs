@@ -22,6 +22,6 @@ test('worker loop rotates tasks after errors without an immediate retry',async()
 });
 test('closing before the first timer prevents admission',async()=>{
   let calls=0;const loop=createWorkerLoop([async()=>{calls++;}],1);loop.start();await loop.close();await pause(5);assert.equal(calls,0);
-  for(const [tasks,interval] of [[[],1],[[null],1],[[()=>{}],0],[[()=>{}],60001],[Array.from({length:98},()=>()=>{}),1]])
+  for(const [tasks,interval] of [[[],1],[[null],1],[[()=>{}],0],[[()=>{}],60001],[Array.from({length:130},()=>()=>{}),1]])
     assert.throws(()=>createWorkerLoop(tasks,interval),/invalid_connector_worker_loop/);
 });
