@@ -19,6 +19,34 @@ export function createPostgresRepository(pool) {
     refresh_token_ref AS "refreshTokenRef", (extract(epoch FROM token_expires_at)*1000)::float8 AS "tokenExpiresAt",
     capabilities, scopes, status FROM canvas_connector.connections WHERE organization_id=$1 AND platform_id=$2`;
   return Object.freeze({
+    async consumeAuthorizationAttempt(hash, browserBindingHash) {
+      if (!/^[a-f0-9]{64}$/.test(hash ?? '') || !/^[a-f0-9]{64}$/.test(browserBindingHash ?? '')) return null;
+      return first(`SELECT state_hash AS "stateHash",browser_binding_hash AS "browserBindingHash",state_hash AS "authorizationId",
+        organization_id AS "organizationId",platform_id AS "platformId",
+        platform_config_version::float8 AS "platformConfigVersion",canvas_origin AS "canvasOrigin",
+        client_id AS "clientId",client_secret_ref AS "clientSecretRef",capabilities,scopes,redirect_uri AS "redirectUri",
+        (extract(epoch FROM created_at)*1000)::float8 AS "createdAt",
+        (extract(epoch FROM expires_at)*1000)::float8 AS "expiresAt"
+        FROM canvas_connector.consume_authorization_attempt($1,$2)`,[hash,browserBindingHash]);
+    },
+    async beginAuthorizationExchange(hash, org, platform) {
+      return (await first('SELECT canvas_connector.begin_authorization_exchange($1,$2,$3) AS ok',[hash,org,platform])).ok===true;
+    },
+    async requireAuthorizationReconciliation(hash, org, platform) {
+      return (await first('SELECT canvas_connector.require_authorization_reconciliation($1,$2,$3) AS ok',[hash,org,platform])).ok===true;
+    },
+    async publishAuthorizationConnection(hash, org, platform) {
+      return (await first('SELECT canvas_connector.publish_authorization_connection($1,$2,$3) AS ok',[hash,org,platform])).ok===true;
+    },
+    async authorizationAttempt(hash, org, platform) {
+      // Internal recovery snapshot only; never returns code, browser proof,
+      // plaintext, ciphertext or any provider response. No HTTP route is added.
+      return first(`SELECT authorization_hash AS "authorizationId",organization_id AS "organizationId",
+        platform_id AS "platformId",phase,access_token_ref AS "accessTokenRef",refresh_token_ref AS "refreshTokenRef",
+        (extract(epoch FROM token_expires_at)*1000)::float8 AS "tokenExpiresAt"
+        FROM canvas_connector.authorization_attempts
+        WHERE authorization_hash=$1 AND organization_id=$2 AND platform_id=$3`,[hash,org,platform]);
+    },
     async claimRefresh(org, id) {
       return first(`SELECT id,lease_id AS "leaseId",organization_id AS "organizationId",platform_id AS "platformId",
         canvas_origin AS "canvasOrigin",client_id AS "clientId",client_secret_ref AS "clientSecretRef",

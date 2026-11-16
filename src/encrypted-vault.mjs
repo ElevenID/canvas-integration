@@ -110,6 +110,29 @@ export function createEncryptedVault({ pool, keyProvider } = {}) {
       if (result.rows.length!==1) fail();
       return Object.freeze(result.rows[0]);
     },
+    // Initial exchange counterpart of stageRefreshResult. All ciphertexts and
+    // the durable attempt's refs commit together, including after config drift.
+    async stageAuthorizationResult(attempt,bundle,expiresAt) {
+      if (!/^[a-f0-9]{64}$/.test(attempt?.authorizationId ?? '')
+          || !id(attempt.organizationId) || !id(attempt.platformId)
+          || (expiresAt!==null && (!Number.isSafeInteger(expiresAt) || expiresAt<=0))) fail();
+      const prepare=async(purpose,value)=>{
+        if (typeof value!=='string' || !value.length || value.length>4096 || Buffer.byteLength(value)>16384) fail();
+        const row={reference:randomUUID(),platform_id:attempt.platformId,provider:'canvas',purpose};
+        const plaintext=Buffer.from(value);
+        try {return {...row,...await encrypt(attempt.organizationId,row,plaintext),key_id:row.key_id};}
+        finally {plaintext.fill(0);}
+      };
+      const access=await prepare('oauth_access_token',bundle?.accessToken);
+      const refresh=bundle?.refreshToken==null?null:await prepare('oauth_refresh_token',bundle.refreshToken);
+      const result=await execute(`SELECT access_token_ref AS "accessTokenRef",refresh_token_ref AS "refreshTokenRef"
+        FROM canvas_connector.stage_authorization_result($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,to_timestamp($14::float8/1000))`,
+        [attempt.authorizationId,attempt.organizationId,attempt.platformId,access.reference,access.key_id,
+          access.ciphertext,access.nonce,access.tag,refresh?.reference??null,refresh?.key_id??null,
+          refresh?.ciphertext??null,refresh?.nonce??null,refresh?.tag??null,expiresAt]);
+      if (result.rows.length!==1) fail();
+      return Object.freeze(result.rows[0]);
+    },
     async rotate(org, reference) {
       const previous = await load(org, reference);
       let plaintext;
