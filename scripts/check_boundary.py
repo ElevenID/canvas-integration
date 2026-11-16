@@ -22,6 +22,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/encrypted-vault.mjs': {'node:crypto'},
  'src/gateway-admin-auth.mjs': {'node:https'},
  'src/gateway-client.mjs': {'./operations.mjs', 'node:https'},
+ 'src/observation-submit.mjs': {'node:https'},
  'src/oauth-admin-http.mjs': {'./oauth-browser-binding.mjs'},
  'src/oauth-browser-binding.mjs': {'node:crypto'},
  'src/oauth-callback-http.mjs': {'./oauth-browser-binding.mjs'},
@@ -78,6 +79,7 @@ def audit(root: Path) -> list[str]:
      './configuration': './src/configuration.mjs',
      './encrypted-vault': './src/encrypted-vault.mjs',
      './gateway-admin-auth': './src/gateway-admin-auth.mjs',
+     './observations': './src/observation-submit.mjs',
      './oauth-admin-http': './src/oauth-admin-http.mjs',
      './oauth-browser-binding': './src/oauth-browser-binding.mjs',
      './oauth-callback-http': './src/oauth-callback-http.mjs',
@@ -117,6 +119,15 @@ def audit(root: Path) -> list[str]:
                       "publishConnection", "completionLocation"):
         if invariant not in lifecycle:
             errors.append("Canvas OAuth lifecycle invariant missing")
+    observation = (root / "src/observation-submit.mjs").read_text()
+    for invariant in ("new URL('/v1/evidence/observations',origin)", "method:'POST'", "agent:false",
+                      "rejectUnauthorized:true", "minVersion:'TLSv1.2'", "apiKeyProvider.getApiKey",
+                      "'Idempotency-Key':envelope.observation_id", "'X-API-Key':apiKey",
+                      "encodeExternalObservation(envelope)!==body", "controller.signal.aborted", "size>2048"):
+        if invariant not in observation:
+            errors.append("Observation Gateway transport invariant missing")
+    if re.search(r"process\s*\.\s*env|X-Organization-ID|X-User-ID|/internal/|/canvas/|Bearer ", observation):
+        errors.append("unreviewed observation credential/authority/route")
     driver = (root / "src/postgres-pool.mjs").read_text()
     for invariant in ("rejectUnauthorized:true", "minVersion:'TLSv1.2'", "queryMode:'extended'",
                       "client.getTransactionStatus()!=='I'", "client?.release(failed)",
