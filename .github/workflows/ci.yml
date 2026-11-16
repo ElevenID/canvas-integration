@@ -22,8 +22,24 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
+      - run: npm ci --ignore-scripts --omit=optional --no-audit --no-fund
       - name: Test isolated connector storage and concurrent state consumption
         run: python3 scripts/test_postgres_storage.py
+  driver:
+    name: Connector PostgreSQL TLS driver and OpenBao vault
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --omit=optional --no-audit --no-fund
+      - name: Test real TLS database, readonly keys, encrypted vault and denial
+        run: python3 scripts/test_postgres_pool.py
   key-custody:
     name: Connector OpenBao key provider contract
     runs-on: ubuntu-latest
@@ -36,6 +52,7 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
+      - run: npm ci --ignore-scripts --omit=optional --no-audit --no-fund
       - name: Test isolated pinned OpenBao with synthetic keys and read-only token
         run: python3 scripts/test_openbao_key_provider.py
   boundary:
@@ -52,5 +69,5 @@ jobs:
           package-manager-cache: false
       - name: Test independent checkout without core sources or credentials
         run: |
-          npm ci --ignore-scripts --offline --no-audit --no-fund
+          npm ci --ignore-scripts --omit=optional --no-audit --no-fund
           npm run check

@@ -4,6 +4,7 @@
 This is a regression gate, not a sandbox for malicious JavaScript. Deployment
 network isolation and Gateway authorization remain separate requirements.
 """
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -26,6 +27,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/oauth-callback-http.mjs': {'./oauth-browser-binding.mjs'},
  'src/openbao-key-provider.mjs': {'node:https'},
  'src/operations.mjs': set(),
+ 'src/postgres-pool.mjs': {'pg/lib/client.js', 'pg-pool'},
  'src/postgres-repository.mjs': set(),
  'src/refresh-worker.mjs': set(),
  'src/revocation-worker.mjs': set()}
@@ -57,12 +59,18 @@ def audit(root: Path) -> list[str]:
         ):
             errors.append(f"core authority in Canvas provider: {name}")
     package = json.loads((root / "package.json").read_text())
-    for field in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+    if package.get("dependencies") != {"pg": "8.23.1", "pg-pool": "3.14.0"}:
+        errors.append("unreviewed production driver dependencies")
+    for field in ("devDependencies", "optionalDependencies", "peerDependencies"):
         if package.get(field):
             errors.append(f"unreviewed package dependencies: {field}")
     lock = json.loads((root / "package-lock.json").read_text())
-    if set(lock.get("packages", {})) != {""}:
+    # Exact reviewed dependency graph, including registry integrity and optional metadata.
+    graph = {k: v for k, v in lock.get("packages", {}).items() if k}
+    if hashlib.sha256(json.dumps(graph, sort_keys=True, separators=(",", ":")).encode()).hexdigest() != "a19f44c0f4c66c2f8ee255126d59d16cddb12e3a29213a306c9cad0af9a5c68d":
         errors.append("lock contains unreviewed external packages")
+    if lock.get("packages", {}).get("", {}).get("dependencies") != package.get("dependencies"):
+        errors.append("root lock dependencies differ from reviewed package")
     expected = {'.': './src/gateway-client.mjs',
      './canvas-oauth': './src/canvas-oauth.mjs',
      './canvas-oauth-provider': './src/canvas-oauth-provider.mjs',
@@ -74,6 +82,7 @@ def audit(root: Path) -> list[str]:
      './oauth-browser-binding': './src/oauth-browser-binding.mjs',
      './oauth-callback-http': './src/oauth-callback-http.mjs',
      './openbao-key-provider': './src/openbao-key-provider.mjs',
+     './postgres-pool': './src/postgres-pool.mjs',
      './postgres-repository': './src/postgres-repository.mjs',
      './refresh-worker': './src/refresh-worker.mjs',
      './revocation-worker': './src/revocation-worker.mjs'}
@@ -108,6 +117,14 @@ def audit(root: Path) -> list[str]:
                       "publishConnection", "completionLocation"):
         if invariant not in lifecycle:
             errors.append("Canvas OAuth lifecycle invariant missing")
+    driver = (root / "src/postgres-pool.mjs").read_text()
+    for invariant in ("rejectUnauthorized:true", "minVersion:'TLSv1.2'", "queryMode:'extended'",
+                      "client.getTransactionStatus()!=='I'", "client?.release(failed)",
+                      "this.connection.stream.destroy()", "credentialProvider.getPassword", "active>=maxConnections", "replication:'false'"):
+        if invariant not in driver:
+            errors.append("PostgreSQL transport invariant missing")
+    if re.search(r"process\s*\.\s*env|connectionString|pg-native|/internal/", driver):
+        errors.append("unreviewed PostgreSQL credential or transport fallback")
     key_provider = (root / "src/openbao-key-provider.mjs").read_text()
     for invariant in ("rejectUnauthorized:true", "agent:false", "method:'GET'", "'X-Vault-Token':token",
                       "?version=1", "metadata.destroyed!==false", "controller.abort()", "keyPath}/current"):
@@ -128,4 +145,4 @@ if __name__ == "__main__":
     if violations:
         print("Boundary check failed:\n" + "\n".join(violations), file=sys.stderr)
         sys.exit(1)
-    print("Boundary check passed: reviewed runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")
+    print("Boundary check passed: reviewed runtime modules, separate Gateway/Canvas HTTPS owners, exact pinned PostgreSQL dependency graph.")

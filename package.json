@@ -79,6 +79,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/openbao-key-provider.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./postgres-pool": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/postgres-pool.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
@@ -93,5 +98,9 @@
     "LICENSE",
     "README.md",
     "NOTICE.md"
-  ]
+  ],
+  "dependencies": {
+    "pg": "8.23.1",
+    "pg-pool": "3.14.0"
+  }
 }

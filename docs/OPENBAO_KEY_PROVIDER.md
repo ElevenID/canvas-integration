@@ -83,5 +83,7 @@ failures, invalid IDs/paths, no cached fallback, and credential isolation.
 
 This supplies a concrete external key reader, not a qualified managed OpenBao
 installation. Production unseal/storage/backup/agent roles, token renewal,
-network policy, rootless deployment, database/driver/server composition,
+network policy, rootless deployment and full server composition,
 retirement audit and end-to-end qualification remain required before activation.
+
+The actual verified-TLS PostgreSQL driver and encrypted-vault composition now has a separate disposable contract in `scripts/test_postgres_pool.py`; see [POSTGRES_DRIVER.md](POSTGRES_DRIVER.md). This does not qualify a deployed server or core integration.
