@@ -98,6 +98,10 @@ BEGIN
         RAISE EXCEPTION 'backoff was bypassed'; END IF;
     UPDATE canvas_connector.revocation_jobs SET available_at=clock_timestamp()-interval '1 second' WHERE id=job.id;
     SELECT * INTO replacement FROM canvas_connector.claim_revocation();
+    IF canvas_connector.finish_revocation(replacement.id,replacement.lease_id) THEN
+        RAISE EXCEPTION 'completion accepted before confirmed provider revocation'; END IF;
+    IF NOT canvas_connector.record_provider_revocation(replacement.id,replacement.lease_id) THEN
+        RAISE EXCEPTION 'provider revocation was not recorded'; END IF;
     IF NOT canvas_connector.finish_revocation(replacement.id,replacement.lease_id) THEN
         RAISE EXCEPTION 'current worker completion failed'; END IF;
     IF EXISTS(SELECT 1 FROM canvas_connector.claim_revocation()) THEN

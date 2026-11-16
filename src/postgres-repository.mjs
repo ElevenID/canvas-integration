@@ -19,6 +19,23 @@ export function createPostgresRepository(pool) {
     refresh_token_ref AS "refreshTokenRef", (extract(epoch FROM token_expires_at)*1000)::float8 AS "tokenExpiresAt",
     capabilities, scopes, status FROM canvas_connector.connections WHERE organization_id=$1 AND platform_id=$2`;
   return Object.freeze({
+    async disconnect(org, id) {
+      return (await first('SELECT canvas_connector.disconnect($1,$2) AS ok', [org, id])).ok === true;
+    },
+    async claimRevocation() {
+      return first(`SELECT id,organization_id AS "organizationId",platform_id AS "platformId",
+        canvas_origin AS "canvasOrigin",access_token_ref AS "accessTokenRef",refresh_token_ref AS "refreshTokenRef",
+        lease_id AS "leaseId",(provider_revoked_at IS NOT NULL) AS revoked FROM canvas_connector.claim_revocation()`, []);
+    },
+    async recordProviderRevocation(id, lease) {
+      return (await first('SELECT canvas_connector.record_provider_revocation($1,$2) AS ok', [id, lease])).ok === true;
+    },
+    async finishRevocation(id, lease) {
+      return (await first('SELECT canvas_connector.finish_revocation($1,$2) AS ok', [id, lease])).ok === true;
+    },
+    async retryRevocation(id, lease) {
+      return (await first('SELECT canvas_connector.retry_revocation($1,$2) AS ok', [id, lease])).ok === true;
+    },
     getPlatform: (org, id) => first(platform, [org, id]),
     connection: (org, id) => first(connection, [org, id]),
     async saveAuthorization(value) {

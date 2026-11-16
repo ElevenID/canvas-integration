@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createPostgresRepository } from '../src/postgres-repository.mjs';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
 import { createEncryptedVault } from '../src/encrypted-vault.mjs';
+import { createRevocationWorker } from '../src/revocation-worker.mjs';
 
 const container = process.argv[2];
 assert.match(container ?? '', /^canvas-storage-test-[a-f0-9]{32}$/);
@@ -33,7 +34,7 @@ const pool = { async query(sql, values) {
   const [names, ...records] = csv(output);
   return { rows: records.map(record => Object.fromEntries(names.map((name, index) => {
     let value = record[index];
-    if (['enabled', 'archived', 'ok'].includes(name)) value = value === 't';
+    if (['enabled', 'archived', 'ok', 'revoked'].includes(name)) value = value === 't';
     else if (['configVersion', 'platformConfigVersion', 'createdAt', 'expiresAt', 'tokenExpiresAt'].includes(name)) value = value === '' ? null : Number(value);
     else if (['capabilities', 'scopes'].includes(name)) {
       // This fixture uses simple scope strings without array delimiters/escapes.
@@ -166,3 +167,32 @@ await vault.delete('adapter-org', other);
 assert.equal(await vault.metadata('adapter-org', other), null);
 assert.deepEqual(key, Buffer.alloc(32, 17), 'vault must not mutate provider-owned key buffers');
 console.log('Encrypted PostgreSQL vault passed roundtrip, ciphertext isolation, tenant isolation, tamper and disablement contracts');
+
+await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
+  VALUES ('worker-org','worker-platform','https://canvas.example.test',true) RETURNING id`, []);
+const accessRef = await vault.put('worker-org', { platformId: 'worker-platform', provider: 'canvas', purpose: 'oauth_access_token' }, 'synthetic-worker-access');
+const refreshRef = await vault.put('worker-org', { platformId: 'worker-platform', provider: 'canvas', purpose: 'oauth_refresh_token' }, 'synthetic-worker-refresh');
+assert.equal(await repository.publishConnection({ ...connection, organizationId: 'worker-org', platformId: 'worker-platform',
+  accessTokenRef: accessRef, refreshTokenRef: refreshRef }, 1), true);
+assert.equal(await repository.disconnect('worker-org', 'worker-platform'), true);
+let providerCalls = 0;
+let injectCleanupFailure = true;
+const worker = createRevocationWorker({ repository,
+  secretVault: { get: vault.get, async delete(org, ref) {
+    if (ref === refreshRef && injectCleanupFailure) { injectCleanupFailure = false; throw Error('synthetic storage outage'); }
+    await vault.delete(org, ref);
+  } },
+  provider: { async revoke(input) {
+    assert.deepEqual(input, { canvasOrigin: 'https://canvas.example.test', accessToken: 'synthetic-worker-access' });
+    providerCalls++; return true;
+  } },
+});
+assert.equal(await worker.runOnce(), 'retry');
+assert.equal(await vault.metadata('worker-org', accessRef), null, 'first cleanup step completed');
+assert.notEqual(await vault.metadata('worker-org', refreshRef), null, 'failed cleanup must retain remaining secret');
+await pool.query("UPDATE canvas_connector.revocation_jobs SET available_at=clock_timestamp()-interval '1 second' WHERE organization_id='worker-org' RETURNING id", []);
+assert.equal(await worker.runOnce(), 'completed');
+assert.equal(providerCalls, 1, 'durable confirmation must resume cleanup without a deleted access token');
+assert.equal(await vault.metadata('worker-org', refreshRef), null);
+assert.equal(await worker.runOnce(), 'idle');
+console.log('Durable revocation worker passed provider confirmation, partial cleanup recovery and completion contracts');

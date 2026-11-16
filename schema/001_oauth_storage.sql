@@ -161,6 +161,8 @@ CREATE TABLE canvas_connector.revocation_jobs (
     platform_id text NOT NULL,
     canvas_origin text NOT NULL,
     access_token_ref text NOT NULL CHECK (octet_length(access_token_ref) BETWEEN 1 AND 256),
+    refresh_token_ref text CHECK (octet_length(refresh_token_ref) BETWEEN 1 AND 256),
+    provider_revoked_at timestamptz,
     attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     available_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     lease_id uuid,
@@ -186,10 +188,12 @@ BEGIN
      RETURNING * INTO connection;
     IF NOT FOUND THEN RETURN false; END IF;
     INSERT INTO canvas_connector.revocation_jobs
-        (organization_id, platform_id, canvas_origin, access_token_ref)
+        (organization_id, platform_id, canvas_origin, access_token_ref, refresh_token_ref)
     VALUES (connection.organization_id, connection.platform_id,
-            connection.canvas_origin, connection.access_token_ref)
+            connection.canvas_origin, connection.access_token_ref, connection.refresh_token_ref)
     ON CONFLICT (organization_id, platform_id, access_token_ref) DO NOTHING;
+    UPDATE canvas_connector.oauth_status SET status='reauthorization_required',authorization_hash=NULL
+     WHERE organization_id=requested_org AND platform_id=requested_platform;
     RETURN true;
 END;
 $$;
@@ -209,6 +213,16 @@ RETURNS SETOF canvas_connector.revocation_jobs LANGUAGE sql AS $$
 $$;
 
 -- An expired worker cannot acknowledge a job reclaimed by another worker.
+CREATE FUNCTION canvas_connector.record_provider_revocation(requested_id uuid, expected_lease uuid)
+RETURNS boolean LANGUAGE sql AS $$
+    WITH recorded AS (
+        UPDATE canvas_connector.revocation_jobs
+           SET provider_revoked_at = coalesce(provider_revoked_at,clock_timestamp())
+         WHERE id=requested_id AND lease_id=expected_lease
+           AND lease_until > clock_timestamp() AND completed_at IS NULL RETURNING id
+    ) SELECT EXISTS(SELECT 1 FROM recorded);
+$$;
+
 CREATE FUNCTION canvas_connector.finish_revocation(requested_id uuid, expected_lease uuid)
 RETURNS boolean LANGUAGE sql AS $$
     WITH finished AS (
@@ -216,6 +230,10 @@ RETURNS boolean LANGUAGE sql AS $$
            SET completed_at = clock_timestamp(), lease_id = NULL, lease_until = NULL
          WHERE id = requested_id AND lease_id = expected_lease
            AND lease_until > clock_timestamp() AND completed_at IS NULL
+           AND provider_revoked_at IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM canvas_connector.secrets secret
+                WHERE secret.organization_id=revocation_jobs.organization_id
+                  AND secret.reference IN (revocation_jobs.access_token_ref,revocation_jobs.refresh_token_ref))
         RETURNING id
     ) SELECT EXISTS(SELECT 1 FROM finished);
 $$;

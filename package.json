@@ -44,6 +44,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/encrypted-vault.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./revocation-worker": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/revocation-worker.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
