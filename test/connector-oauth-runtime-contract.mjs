@@ -17,6 +17,7 @@ import { createOAuthHttpRateLimiter } from '../src/oauth-http-rate-limiter.mjs';
 import { createConnectorOAuthRuntime } from '../src/connector-oauth-runtime.mjs';
 import { createConnectorDatabasePasswordFile, createConnectorOpenBaoTokenFile } from '../src/file-credentials.mjs';
 import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
+import { captureRouteHttpContract } from './capture-route-http-contract.mjs';
 const file = process.argv[2], container = process.argv[3], baoContainer = process.argv[4];
 assert.match(file ?? '', /canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);
 assert.match(container ?? '', /^canvas-pg-driver-[a-f0-9]{32}$/);
@@ -59,9 +60,18 @@ let permitted = true, exchanges = 0, requestBody;
 let entered, release;
 const exchangeEntered = new Promise(resolve => { entered = resolve; });
 const exchangeRelease = new Promise(resolve => { release = resolve; });
-gateway.setHandler((req, res) => {
+const bindings=new Map();let bindingAllowed=true;
+gateway.setHandler(async (req, res) => {
   if (req.url === '/v1/auth/me') return json(res, { authenticated: true, user: { user_id: 'actor', organization_id: org } });
   if (req.url === `/v1/organizations/${org}/members/me/permissions`) return json(res, { permissions: permitted ? ['integration-connector:edit'] : [] });
+  if(req.method==='POST' && req.url.startsWith(`/v1/organizations/${org}/external-observation-bindings/`) && req.url.endsWith('/inspect')) {
+    assert.equal(req.headers.origin,origin);assert.equal(req.headers.cookie,'session=abcdefghijklmnop');
+    assert.equal(req.headers['x-api-key'],undefined);assert.equal(req.headers['x-organization-id'],undefined);
+    let body='';for await(const chunk of req) body+=chunk;assert.equal(body,'{}');
+    if(!bindingAllowed) return json(res,{detail:'synthetic binding permission denied'},403);
+    const binding=req.url.split('/').at(-2),record=bindings.get(binding)??null;
+    return json(res,{found:record!==null,record,snapshot_at_ms:Date.now()},200,{'Cache-Control':'no-store'});
+  }
   res.writeHead(404); res.end();
 });
 canvas.setHandler(async (req, res) => {
@@ -210,6 +220,13 @@ try {
     GRANT USAGE ON SCHEMA canvas_connector TO canvas_oauth_http;
     GRANT SELECT ON canvas_connector.platforms,canvas_connector.oauth_http_limit TO canvas_oauth_http;
     GRANT INSERT ON canvas_connector.platforms TO canvas_oauth_http;
+    GRANT SELECT ON canvas_connector.rest_capture_routes,canvas_connector.rest_route_operation_audit TO canvas_oauth_http;
+    GRANT INSERT(organization_id,id,producer_ref,platform_id,binding_id,binding_revision,requirement,claim_names,effective_time_policy,enabled) ON canvas_connector.rest_capture_routes TO canvas_oauth_http;
+    GRANT UPDATE(binding_revision,requirement,claim_names,effective_time_policy,enabled) ON canvas_connector.rest_capture_routes TO canvas_oauth_http;
+    GRANT INSERT(organization_id,operation_id,platform_id,route_id,actor_id,action,request,receipt) ON canvas_connector.rest_route_operation_audit TO canvas_oauth_http;
+    GRANT INSERT(organization_id,capture_id,producer_ref,route_id,route_version,platform_id,binding_id,binding_revision,requirement,claim_names,effective_time_policy) ON canvas_connector.rest_capture_jobs TO canvas_oauth_http;
+    GRANT SELECT(organization_id,capture_id,producer_ref,route_id,route_version,platform_id,binding_id,binding_revision,requirement,claim_names,effective_time_policy,phase,attempts,available_at,lease_id,lease_expires_at,last_error) ON canvas_connector.rest_capture_jobs TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION canvas_connector.valid_rest_route(jsonb,text[]),canvas_connector.administer_rest_route(text,text,text,uuid,text,text,bigint,bigint,jsonb) TO canvas_oauth_http;
     GRANT SELECT,INSERT ON canvas_connector.platform_operation_audit TO canvas_oauth_http;
     GRANT SELECT,INSERT ON canvas_connector.oauth_client_configurations,canvas_connector.oauth_client_provisioning_audit TO canvas_oauth_http;
     GRANT UPDATE(client_id,client_secret_ref,platform_config_version) ON canvas_connector.oauth_client_configurations TO canvas_oauth_http;
@@ -253,7 +270,8 @@ try {
   } finally { owner('ALTER TABLE canvas_connector.secrets ENABLE TRIGGER secret_creation_time;'); }
   for(const [table,trigger] of [['connections','connection_identity'],['authorization_attempts','authorization_cleanup'],
     ['connection_operation_audit','connection_operation_audit_immutable'],['platforms','platform_configuration_revision'],
-    ['platform_operation_audit','platform_operation_audit_immutable'],['oauth_client_provisioning_audit','oauth_client_provisioning_audit_immutable']]) {
+    ['platform_operation_audit','platform_operation_audit_immutable'],['oauth_client_provisioning_audit','oauth_client_provisioning_audit_immutable'],
+    ['rest_capture_routes','rest_route_revision'],['rest_capture_jobs','rest_capture_immutable'],['rest_route_operation_audit','rest_route_operation_audit_immutable']]) {
     owner(`ALTER TABLE canvas_connector.${table} DISABLE TRIGGER ${trigger};`);
     try {
       const missingGuard=await runtime({database:httpDatabase});
@@ -393,6 +411,11 @@ try {
   const platformReceiptBody=new URLSearchParams({operation_id:platformReceipt.operationId}).toString();
   assert.deepEqual(JSON.parse((await send(secondAddress,{path:platformPath+'receipt',body:platformReceiptBody}).response).body).receipt,platformReceipt);
   console.log('Actual Gateway-authorized restricted-role HTTPS platform create/enable/catalog/inspect/CAS/immutable receipt replay passed');
+  const captureLimitedPool=createConnectorPostgresPool(httpDatabase);
+  try { await captureRouteHttpContract({send,address:secondAddress,organizationId:org,canvasOrigin:canvas.origin,pool,
+    limitedPool:captureLimitedPool,gateway,owner,bindings,setBindingAllowed:value=>{bindingAllowed=value;}}); }
+  finally {await captureLimitedPool.close();}
+
   permitted = false;
   assert.equal((await send(secondAddress, { body: 'client_id=runtime-client' }).response).status, 403);
   const before = gateway.seen.length;

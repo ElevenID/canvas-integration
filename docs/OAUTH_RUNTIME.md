@@ -3,8 +3,10 @@
 `./connector-oauth-runtime` composes the actual connector PostgreSQL transport,
 repository, encrypted vault, read-only OpenBao key provider, Canvas OAuth provider,
 lifecycle, public Gateway session authenticator, database HTTP budget and HTTPS
-listener. It exposes only `listen()` and `close()`. Capture, delivery, refresh and
-revocation worker scheduling remain separate work.
+listener. It exposes only `listen()` and `close()`. The listener includes
+[capture-route administration and manual scheduling](CAPTURE_ROUTE_ADMINISTRATION.md).
+A separate worker service performs capture, delivery, refresh and revocation;
+automatic capture scheduling remains unfinished.
 
 ```js
 import { createConnectorOAuthRuntime } from '@elevenid/canvas-integration/connector-oauth-runtime';
@@ -84,6 +86,12 @@ only. The budget role can update only hits/window, not policy. Required function
 EXECUTE and enabled revision/identity/cleanup/audit guards are checked before
 listening. This is trusted connector code, not a public SQL interface; fixture
 grants do not approve production ownership, memberships or provisioning.
+
+Capture administration adds route SELECT and selected INSERT/UPDATE columns,
+immutable operation-audit SELECT/INSERT, and selected pending-capture INSERT and
+progress-metadata SELECT. It grants no job UPDATE/DELETE, token-reference read,
+route-identity/version UPDATE or sequence access. Startup also checks its exact
+column/function capabilities and enabled route/capture/audit guards.
 
 `python3 scripts/test_postgres_pool.py` runs actual verified-TLS PostgreSQL,
 OpenBao, encrypted vault and HTTPS runtime with synthetic Canvas and

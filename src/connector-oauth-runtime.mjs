@@ -12,6 +12,8 @@ import { createOAuthAttemptRecoveryStore } from './oauth-attempt-recovery.mjs';
 import { createConnectionAdminStore } from './connection-admin.mjs';
 import { createPlatformAdminStore } from './platform-admin.mjs';
 import { createOAuthClientStore } from './oauth-client-admin.mjs';
+import { createCaptureRouteAdminStore } from './capture-route-admin-store.mjs';
+import { createGatewayBindingReader } from './gateway-binding-reader.mjs';
 
 const unavailable = () => new Error('connector_oauth_runtime_unavailable');
 function fields(value, allowed) {
@@ -41,6 +43,8 @@ export async function createConnectorOAuthRuntime(configuration) {
       connectionStore:createConnectionAdminStore(pool),
       platformStore:createPlatformAdminStore(pool),
       clientStore:createOAuthClientStore(pool,secretVault),
+      captureStore:createCaptureRouteAdminStore(pool),
+      readBinding:createGatewayBindingReader({...gatewayAuthentication,adminOrigin:http.publicOrigin}),
       rateLimiter: createOAuthHttpRateLimiter(pool) });
     let state = 'created', starting, closing;
     async function preflight() {
@@ -50,6 +54,7 @@ export async function createConnectorOAuthRuntime(configuration) {
         SELECT 1 FROM (VALUES
           ('platforms','SELECT'),('secrets','SELECT'),('secrets','INSERT'),
           ('platforms','INSERT'),('platform_operation_audit','SELECT'),('platform_operation_audit','INSERT'),
+          ('rest_capture_routes','SELECT'),('rest_route_operation_audit','SELECT'),
           ('oauth_client_configurations','SELECT'),('oauth_client_configurations','INSERT'),
           ('oauth_client_provisioning_audit','SELECT'),('oauth_client_provisioning_audit','INSERT'),
           ('authorizations','SELECT'),('authorizations','INSERT'),('authorizations','DELETE'),
@@ -78,18 +83,31 @@ export async function createConnectorOAuthRuntime(configuration) {
           AND tgfoid='canvas_connector.keep_secret_created_at()'::regprocedure
           AND NOT tgisinternal AND tgenabled IN ('O','A') AND tgtype=19
           AND tgqual IS NULL AND tgnargs=0 AND tgattr=''::int2vector)
-        AND (SELECT count(*)=6 FROM pg_catalog.pg_trigger t JOIN (VALUES
+        AND (SELECT count(*)=9 FROM pg_catalog.pg_trigger t JOIN (VALUES
           ('connections','connection_identity','keep_connection_identity()',19),
           ('authorization_attempts','authorization_cleanup','fence_authorization_cleanup()',19),
           ('connection_operation_audit','connection_operation_audit_immutable','keep_connection_operation_audit()',27),
           ('platforms','platform_configuration_revision','bump_platform_configuration()',19),
           ('platform_operation_audit','platform_operation_audit_immutable','keep_platform_operation_audit()',27),
-          ('oauth_client_provisioning_audit','oauth_client_provisioning_audit_immutable','keep_oauth_client_provisioning_audit()',27)
+          ('oauth_client_provisioning_audit','oauth_client_provisioning_audit_immutable','keep_oauth_client_provisioning_audit()',27),
+          ('rest_capture_routes','rest_route_revision','revise_rest_route()',19),
+          ('rest_capture_jobs','rest_capture_immutable','protect_rest_capture()',27),
+          ('rest_route_operation_audit','rest_route_operation_audit_immutable','keep_rest_route_operation_audit()',27)
           ) expected(relation,name,signature,kind)
           ON t.tgrelid=('canvas_connector.'||expected.relation)::regclass AND t.tgname=expected.name
           AND t.tgfoid=('canvas_connector.'||expected.signature)::regprocedure
           WHERE NOT t.tgisinternal AND t.tgenabled IN ('O','A') AND t.tgtype=expected.kind
             AND t.tgqual IS NULL AND t.tgnargs=0 AND t.tgattr=''::int2vector)
+        AND NOT EXISTS(SELECT 1 FROM (VALUES
+          ('rest_capture_routes','INSERT',ARRAY['organization_id','id','producer_ref','platform_id','binding_id','binding_revision','requirement','claim_names','effective_time_policy','enabled']),
+          ('rest_capture_routes','UPDATE',ARRAY['binding_revision','requirement','claim_names','effective_time_policy','enabled']),
+          ('rest_route_operation_audit','INSERT',ARRAY['organization_id','operation_id','platform_id','route_id','actor_id','action','request','receipt']),
+          ('rest_capture_jobs','INSERT',ARRAY['organization_id','capture_id','producer_ref','route_id','route_version','platform_id','binding_id','binding_revision','requirement','claim_names','effective_time_policy']),
+          ('rest_capture_jobs','SELECT',ARRAY['organization_id','capture_id','producer_ref','route_id','route_version','platform_id','binding_id','binding_revision','requirement','claim_names','effective_time_policy','phase','attempts','available_at','lease_id','lease_expires_at','last_error'])
+          ) capability(relation,privilege,names) CROSS JOIN LATERAL unnest(capability.names) field(name)
+          WHERE NOT has_column_privilege(current_user,'canvas_connector.'||capability.relation,field.name,capability.privilege))
+        AND has_function_privilege(current_user,'canvas_connector.valid_rest_route(jsonb,text[])','EXECUTE')
+        AND has_function_privilege(current_user,'canvas_connector.administer_rest_route(text,text,text,uuid,text,text,bigint,bigint,jsonb)','EXECUTE')
         AND has_column_privilege(current_user,'canvas_connector.oauth_http_limit','hits','UPDATE')
         AND has_column_privilege(current_user,'canvas_connector.oauth_http_limit','window_started_at','UPDATE')
         AND has_function_privilege(current_user,'canvas_connector.consume_oauth_http_limit()','EXECUTE')
