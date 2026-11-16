@@ -4,6 +4,7 @@
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { createPostgresRepository } from '../src/postgres-repository.mjs';
+import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
 
 const container = process.argv[2];
 assert.match(container ?? '', /^canvas-storage-test-[a-f0-9]{32}$/);
@@ -33,6 +34,11 @@ const pool = { async query(sql, values) {
     let value = record[index];
     if (['enabled', 'archived', 'ok'].includes(name)) value = value === 't';
     else if (['configVersion', 'platformConfigVersion', 'createdAt', 'expiresAt', 'tokenExpiresAt'].includes(name)) value = value === '' ? null : Number(value);
+    else if (['capabilities', 'scopes'].includes(name)) {
+      // This fixture uses simple scope strings without array delimiters/escapes.
+      assert.match(value, /^\{[^{}"\\]*\}$/);
+      value = value.slice(1, -1) ? value.slice(1, -1).split(',') : [];
+    }
     return [name, value];
   }))) };
 } };
@@ -65,3 +71,51 @@ await repository.markReauthorizationRequired('adapter-org', 'adapter-platform');
 assert.equal((await repository.connection('adapter-org', 'adapter-platform')).status, 'reauthorization_required');
 await assert.rejects(createPostgresRepository({ query: async () => { throw Error('password=secret'); } }).publishConnection(connection, 1), /^Error: connector_database_unavailable$/);
 console.log('Actual repository SQL passed persistence, tenant, replay, configuration and redaction contracts');
+
+// Exercise the real lifecycle + repository. Only vault/provider are synthetic;
+// no in-memory production repository or real OAuth grants are involved.
+for (const uncertainCommit of [false, true]) {
+  const org = uncertainCommit ? 'uncertain-org' : 'lifecycle-org';
+  await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
+    VALUES ($1,'platform','https://canvas.example.test',true) RETURNING id`, [org]);
+  const durablePool = uncertainCommit ? { async query(sql, values) {
+    const result = await pool.query(sql, values);
+    if (sql.startsWith('INSERT INTO canvas_connector.connections')) throw Error('lost commit acknowledgment');
+    return result;
+  } } : pool;
+  const secrets = new Map([['client-secret-ref', 'synthetic-client-secret']]);
+  let exchanges = 0;
+  const lifecycle = createCanvasOAuthLifecycle({
+    publicOrigin: 'https://connector.example.test',
+    completionUrl: 'https://connector.example.test/complete',
+    repository: createPostgresRepository(durablePool),
+    secretVault: {
+      async metadata(tenant, ref) { return tenant === org && ref === 'client-secret-ref'
+        ? { organizationId: org, enabled: true, provider: 'canvas', purpose: 'oauth_client_secret' } : null; },
+      async get(tenant, ref) { assert.equal(tenant, org); return secrets.get(ref); },
+      async put(tenant, metadata, value) {
+        assert.equal(tenant, org); const ref = 'vault-' + metadata.purpose; secrets.set(ref, value); return ref;
+      },
+      async delete(tenant, ref) { assert.equal(tenant, org); secrets.delete(ref); },
+    },
+    provider: { async exchange() {
+      exchanges++;
+      return { accessToken: 'synthetic-access-token', refreshToken: 'synthetic-refresh-token', expiresInSeconds: 3600 };
+    } },
+  });
+  const start = await lifecycle.start({ organizationId: org, platformId: 'platform',
+    clientId: 'client', clientSecretRef: 'client-secret-ref', capabilities: ['catalog'] });
+  const state = new URL(start.authorizationUrl).searchParams.get('state');
+  const callback = await lifecycle.callback({ state, code: 'synthetic-code' });
+  const result = new URL(callback.location);
+  if (uncertainCommit) assert.equal(result.searchParams.get('error_code'), 'oauth_connection_reconciliation_required');
+  else assert.equal(result.searchParams.get('outcome'), 'connected');
+  assert.equal(exchanges, 1);
+  const persisted = await repository.connection(org, 'platform');
+  assert.equal(persisted.accessTokenRef, 'vault-oauth_access_token');
+  assert.equal(secrets.size, 3, 'committed or uncertain publication must retain both token references');
+  const replay = await lifecycle.callback({ state, code: 'synthetic-code' });
+  assert.equal(new URL(replay.location).searchParams.get('error_code'), 'oauth_state_invalid');
+  assert.equal(exchanges, 1);
+}
+console.log('OAuth lifecycle + PostgreSQL passed fresh authorization, replay and lost-commit-acknowledgment contracts');
