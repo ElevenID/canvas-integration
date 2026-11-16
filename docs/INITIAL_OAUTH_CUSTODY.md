@@ -1,14 +1,23 @@
 # Initial OAuth exchange custody
 
-The initial callback still uses the legacy consumer and independent vault writes.
-Its migration to the attempt adapters below is required before this recovery gap
-is closed. These adapters add no HTTP route, worker, deployment or automatic retry.
+The initial callback uses durable attempt admission and atomic encrypted token
+staging. Independent token writes and inline cleanup/revocation have been removed
+from that flow. These adapters add no recovery HTTP route, worker, deployment or
+automatic retry.
 
 The connector schema owner applies `schema/005_initial_oauth_custody.sql` after
-`001_oauth_storage.sql`. The other installed connector migrations remain required
+`001_oauth_storage.sql`, then applies `006_secret_lock_privilege.sql`. The other installed connector migrations remain required
 for their respective adapters. HTTP startup performs no DDL. All new functions
 use caller privileges; PUBLIC receives no table or function access. Production
 role provisioning and exact named-role qualification remain separate work.
+
+PostgreSQL requires an UPDATE privilege even for the secret row locks used here.
+Migration006 makes `secrets.created_at` immutable. The HTTP role can receive
+`UPDATE(created_at)` to lock rows or perform no-op updates while changes to the
+timestamp are rejected by the trigger. It needs no secret deletion, enabling or
+other secret UPDATE privilege. Startup checks the guard trigger's structure and
+enabled state along with adapter privileges; it does not attest the owner-controlled
+function body, schema provenance, complete least privilege or production grants.
 
 `consumeAuthorizationAttempt(hash, browserBindingHash)` atomically consumes the
 short-lived browser-bound authorization and persists its configuration snapshot.
@@ -18,7 +27,8 @@ an exchange: `beginAuthorizationExchange` must commit successfully first.
 
 Beginning checks the current enabled platform revision/origin, pending
 authorization, enabled client-secret metadata and absence of a connection or
-unresolved exchange. It transitions exactly once. A lost acknowledgment leaves
+unresolved exchange. It transitions exactly once. The callback contacts Canvas
+only after a true admission result. A lost acknowledgment leaves
 the durable state available for inspection; it never authorizes calling Canvas
 again. A process crash after beginning leaves an unresolved exchange. A later
 authorization cannot bypass it.
@@ -41,8 +51,10 @@ not reopen or replace a connection.
 The internal tenant/platform/hash-scoped `authorizationAttempt` snapshot can
 identify committed references after a lost reply. It exports no ciphertext or
 plaintext and is not an operator authorization API. Recovery UI, audited
-operator disposition, revocation/retention, process-crash detection and migration
-of the actual callback are unfinished. Do not expire or delete unresolved
+operator disposition, revocation/retention and process-crash detection are
+unfinished. When exchange may have issued tokens but staging did not commit,
+the attempt records uncertainty without recoverable token material; an operator
+must resolve the Canvas grant. Do not expire or delete unresolved
 attempts or their secrets automatically. The active-exchange index deliberately
 blocks another exchange until that uncertainty has been resolved.
 
@@ -53,6 +65,13 @@ exact SQL replay, conflicting staging, key failure, and configuration,
 authorization, secret and expiry publication fences. They run through the psql
 bridge and the verified-TLS production driver with a real OpenBao key provider.
 The broad synthetic fixture role is not production least-privilege evidence.
+
+The concrete verified-HTTPS Canvas callback contracts inject before-write
+failures and discard actual committed database replies at consumption, admission,
+staging and publication. They inspect the persisted attempt, ciphertext and
+connection, then replay the callback and count actual provider requests. A lost
+provider socket and platform disablement during exchange also retain uncertainty
+without repeating exchange or inline deletion/revocation.
 
 All state remains connector-owned. No core database, private Marty service,
 authority mirror, KMS signer or issuance integration is added. The public Common

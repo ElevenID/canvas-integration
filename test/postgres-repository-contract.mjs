@@ -15,6 +15,7 @@ import { createOAuthAdminHandler } from '../src/oauth-admin-http.mjs';
 import { createOAuthCallbackHandler } from '../src/oauth-callback-http.mjs';
 import { createGatewayAdminAuthenticator } from '../src/gateway-admin-auth.mjs';
 import { initialOAuthCustodyContract } from './initial-oauth-custody-contract.mjs';
+import { initialOAuthLifecycleContract } from './initial-oauth-lifecycle-contract.mjs';
 
 const container = process.argv[2];
 assert.match(container ?? '', /^canvas-storage-test-[a-f0-9]{32}$/);
@@ -55,6 +56,7 @@ const pool = { async query(sql, values) {
 } };
 const repository = createPostgresRepository(pool);
 await initialOAuthCustodyContract(pool);
+await initialOAuthLifecycleContract(pool);
 await pool.query("INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled) VALUES ('adapter-org','adapter-platform','https://canvas.example.test',true)", []);
 assert.equal((await repository.getPlatform('adapter-org', 'adapter-platform')).configVersion, 1);
 assert.equal(await repository.getPlatform('foreign', 'adapter-platform'), null);
@@ -86,39 +88,34 @@ assert.equal((await repository.connection('adapter-org', 'adapter-platform')).st
 await assert.rejects(createPostgresRepository({ query: async () => { throw Error('password=secret'); } }).publishConnection(connection, 1), /^Error: connector_database_unavailable$/);
 console.log('Actual repository SQL passed persistence, tenant, replay, configuration and redaction contracts');
 
-// Exercise the real lifecycle + repository. Only vault/provider are synthetic;
-// no in-memory production repository or real OAuth grants are involved.
+// Actual lifecycle/repository/encrypted vault. Only provider and key source are
+// synthetic; uncertain publication retains committed custody and connection.
 for (const uncertainCommit of [false, true]) {
   const org = uncertainCommit ? 'uncertain-org' : 'lifecycle-org';
   await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
     VALUES ($1,'platform','https://canvas.example.test',true) RETURNING id`, [org]);
   const durablePool = uncertainCommit ? { async query(sql, values) {
     const result = await pool.query(sql, values);
-    if (sql.startsWith('INSERT INTO canvas_connector.connections')) throw Error('lost commit acknowledgment');
+    if (sql.includes('publish_authorization_connection')) throw Error('lost commit acknowledgment');
     return result;
   } } : pool;
-  const secrets = new Map([['client-secret-ref', 'synthetic-client-secret']]);
+  const scopedVault=createEncryptedVault({pool:durablePool,keyProvider:{
+    current:async()=>({id:'synthetic-lifecycle-key',key:Buffer.alloc(32,47)}),byId:async()=>Buffer.alloc(32,47),
+  }});
+  const clientRef=await scopedVault.put(org,{platformId:'platform',provider:'canvas',purpose:'oauth_client_secret'},'synthetic-client-secret');
   let exchanges = 0;
   const lifecycle = createCanvasOAuthLifecycle({
     publicOrigin: 'https://connector.example.test',
     completionUrl: 'https://connector.example.test/complete',
     repository: createPostgresRepository(durablePool),
-    secretVault: {
-      async metadata(tenant, ref) { return tenant === org && ref === 'client-secret-ref'
-        ? { organizationId: org, platformId:'platform', enabled: true, provider: 'canvas', purpose: 'oauth_client_secret' } : null; },
-      async get(tenant, ref) { assert.equal(tenant, org); return secrets.get(ref); },
-      async put(tenant, metadata, value) {
-        assert.equal(tenant, org); const ref = 'vault-' + metadata.purpose; secrets.set(ref, value); return ref;
-      },
-      async delete(tenant, ref) { assert.equal(tenant, org); secrets.delete(ref); },
-    },
+    secretVault:scopedVault,
     provider: { async exchange() {
       exchanges++;
       return { accessToken: 'synthetic-access-token', refreshToken: 'synthetic-refresh-token', expiresInSeconds: 3600 };
     } },
   });
   const start = await lifecycle.start({ browserBinding:Buffer.alloc(32,9).toString('base64url'), organizationId: org, platformId: 'platform',
-    clientId: 'client', clientSecretRef: 'client-secret-ref', capabilities: ['catalog'] });
+    clientId: 'client', clientSecretRef:clientRef, capabilities: ['catalog'] });
   const state = new URL(start.authorizationUrl).searchParams.get('state');
   const callback = await lifecycle.callback({ browserBinding:Buffer.alloc(32,9).toString('base64url'), state, code: 'synthetic-code' });
   const result = new URL(callback.location);
@@ -126,8 +123,9 @@ for (const uncertainCommit of [false, true]) {
   else assert.equal(result.searchParams.get('outcome'), 'connected');
   assert.equal(exchanges, 1);
   const persisted = await repository.connection(org, 'platform');
-  assert.equal(persisted.accessTokenRef, 'vault-oauth_access_token');
-  assert.equal(secrets.size, 3, 'committed or uncertain publication must retain both token references');
+  assert.equal(await scopedVault.get(org,persisted.accessTokenRef),'synthetic-access-token');
+  assert.equal((await pool.query('SELECT (count(*)=3) AS ok FROM canvas_connector.secrets WHERE organization_id=$1',[org])).rows[0].ok,true);
+  assert.equal((await pool.query('SELECT phase FROM canvas_connector.authorization_attempts WHERE organization_id=$1',[org])).rows[0].phase,'published');
   const replay = await lifecycle.callback({ browserBinding:Buffer.alloc(32,9).toString('base64url'), state, code: 'synthetic-code' });
   assert.equal(new URL(replay.location).searchParams.get('error_code'), 'oauth_state_invalid');
   assert.equal(exchanges, 1);

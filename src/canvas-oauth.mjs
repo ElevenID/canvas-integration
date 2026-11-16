@@ -122,9 +122,10 @@ export function createCanvasOAuthLifecycle(configuration) {
   const completionBase = fixedHttpsUrl(configuration.completionUrl, 'invalid_completion_url', true);
   requireMethods(configuration.repository, [
     'getPlatform', 'connection', 'saveAuthorization', 'markAuthorizationPending',
-    'consumeAuthorization', 'cancelAuthorization', 'publishConnection', 'markConnected', 'markReauthorizationRequired',
+    'consumeAuthorizationAttempt', 'beginAuthorizationExchange', 'requireAuthorizationReconciliation',
+    'cancelAuthorization', 'publishAuthorizationConnection', 'markConnected', 'markReauthorizationRequired',
   ], 'invalid_repository');
-  requireMethods(configuration.secretVault, ['metadata', 'get', 'put', 'delete'], 'invalid_secret_vault');
+  requireMethods(configuration.secretVault, ['metadata', 'get', 'stageAuthorizationResult'], 'invalid_secret_vault');
   requireMethods(configuration.provider, ['exchange'], 'invalid_provider');
   const repository = configuration.repository;
   const vault = configuration.secretVault;
@@ -134,15 +135,10 @@ export function createCanvasOAuthLifecycle(configuration) {
   if (typeof clock !== 'function' || typeof random !== 'function') fail('invalid_configuration');
   const redirectUri = callbackUrl(publicOrigin);
 
-  async function cleanupTokens(organizationId, references) {
-    for (const reference of references) {
-      if (typeof reference !== 'string' || !reference) continue;
-      try { await vault.delete(organizationId, reference); } catch { /* cleanup is best-effort */ }
-    }
-  }
-  async function bestEffortRevoke(platformOrigin, accessToken) {
-    if (typeof provider.revoke !== 'function') return;
-    try { await provider.revoke({ canvasOrigin: platformOrigin, accessToken }); } catch { /* never expose provider response */ }
+  async function reconcile(authorization) {
+    try { await repository.requireAuthorizationReconciliation(
+      authorization.authorizationId, authorization.organizationId, authorization.platformId,
+    ); } catch { /* durable attempt remains; never repeat the external exchange */ }
   }
 
   return Object.freeze({
@@ -214,9 +210,13 @@ export function createCanvasOAuthLifecycle(configuration) {
       const now = clock();
       if (!Number.isSafeInteger(now) || now <= 0) fail('clock_unavailable');
       // Repository must compare both hashes atomically before consuming state.
-      const authorization = await repository.consumeAuthorization(stateHash(input.state), now, browserBindingHash);
+      let authorization;
+      try { authorization = await repository.consumeAuthorizationAttempt(stateHash(input.state), browserBindingHash); }
+      catch {
+        return Object.freeze({ location: completionLocation(completionBase, 'error', undefined, 'oauth_connection_reconciliation_required') });
+      }
       if (!isRecord(authorization) || !matchesOAuthBrowserBindingHash(authorization.browserBindingHash,input.browserBinding)
-          || authorization.stateHash !== stateHash(input.state)
+          || authorization.stateHash !== stateHash(input.state) || authorization.authorizationId !== authorization.stateHash
           || !Number.isSafeInteger(authorization.expiresAt) || authorization.expiresAt <= now) {
         return Object.freeze({ location: completionLocation(completionBase, 'error', undefined, 'oauth_state_invalid') });
       }
@@ -263,6 +263,17 @@ export function createCanvasOAuthLifecycle(configuration) {
       if (await repository.connection(organizationId, platformId)) {
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_authorization_conflict') });
       }
+      // A successful, committed begin is mandatory before sending the code.
+      // A lost begin reply may mean exchanging committed: do not call Canvas.
+      let begun;
+      try { begun = await repository.beginAuthorizationExchange(authorization.authorizationId, organizationId, platformId); }
+      catch {
+        await reconcile(authorization);
+        return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_connection_reconciliation_required') });
+      }
+      if (begun !== true) {
+        return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_authorization_conflict') });
+      }
       let tokenBundle;
       try {
         tokenBundle = await provider.exchange({
@@ -274,54 +285,35 @@ export function createCanvasOAuthLifecycle(configuration) {
         });
         validateTokenBundle(tokenBundle);
       } catch {
+        await reconcile(authorization);
         if (typeof repository.recordAuthorizationError === 'function') {
           try { await repository.recordAuthorizationError(organizationId, platformId, 'oauth_token_exchange_failed'); } catch { /* best-effort */ }
         }
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_token_exchange_failed') });
       }
       const expiresAt = tokenExpiry(now, tokenBundle.expiresInSeconds);
-      const references = [];
-      let connection;
+      // The vault commits both ciphertexts and attempt references atomically.
+      // On any failure the outcome may be unknown; preserve custody and never
+      // delete tokens, revoke inline or repeat exchange from this callback.
       try {
-        const accessRef = await vault.put(organizationId, {
-          platformId, provider: 'canvas', purpose: 'oauth_access_token',
-        }, tokenBundle.accessToken);
-        if (!safeText(accessRef, 256) || accessRef === authorization.clientSecretRef) fail('secret_store_failed');
-        references.push(accessRef);
-        let refreshRef = null;
-        if (tokenBundle.refreshToken) {
-          refreshRef = await vault.put(organizationId, {
-            platformId, provider: 'canvas', purpose: 'oauth_refresh_token',
-          }, tokenBundle.refreshToken);
-          if (!safeText(refreshRef, 256) || references.includes(refreshRef)
-              || refreshRef === authorization.clientSecretRef) fail('secret_store_failed');
-          references.push(refreshRef);
+        const refs = await vault.stageAuthorizationResult(authorization, tokenBundle, expiresAt);
+        if (!safeText(refs?.accessTokenRef, 256) || refs.accessTokenRef === authorization.clientSecretRef
+            || (refs.refreshTokenRef !== null && (!safeText(refs.refreshTokenRef, 256)
+              || refs.refreshTokenRef === refs.accessTokenRef || refs.refreshTokenRef === authorization.clientSecretRef))) {
+          fail('secret_store_failed');
         }
-        connection = Object.freeze({
-          organizationId, platformId, canvasOrigin: origin,
-          platformConfigVersion: authorization.platformConfigVersion,
-          clientId: authorization.clientId, clientSecretRef: authorization.clientSecretRef,
-          capabilities: authorization.capabilities, scopes: authorization.scopes,
-          accessTokenRef: accessRef, refreshTokenRef: refreshRef, tokenExpiresAt: expiresAt,
-          status: 'connected', createdAt: now, updatedAt: now,
-        });
       } catch {
-        await cleanupTokens(organizationId, references);
-        await bestEffortRevoke(origin, tokenBundle.accessToken);
-        return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_secret_storage_failed') });
+        await reconcile(authorization);
+        return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_connection_reconciliation_required') });
       }
-
-      // A failed publication acknowledgment has an unknown commit outcome.
-      // Preserve token refs for reconciliation; deleting them could break a committed connection.
       let published;
-      try {
-        published = await repository.publishConnection(connection, authorization.platformConfigVersion);
-      } catch {
+      try { published = await repository.publishAuthorizationConnection(authorization.authorizationId, organizationId, platformId); }
+      catch {
+        await reconcile(authorization);
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_connection_reconciliation_required') });
       }
       if (published !== true) {
-        await cleanupTokens(organizationId, references);
-        await bestEffortRevoke(origin, tokenBundle.accessToken);
+        await reconcile(authorization);
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_authorization_conflict') });
       }
 

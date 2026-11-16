@@ -55,6 +55,7 @@ def main():
             sql((ROOT/'schema/003_rest_capture.sql').read_text())
             sql((ROOT/'schema/004_oauth_http_limit.sql').read_text())
             sql((ROOT/'schema/005_initial_oauth_custody.sql').read_text())
+            sql((ROOT/'schema/006_secret_lock_privilege.sql').read_text())
             sql("""CREATE ROLE canvas_runtime LOGIN PASSWORD 'synthetic-driver-runtime';
                 GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_runtime;
                 GRANT USAGE ON SCHEMA canvas_connector TO canvas_runtime;
@@ -85,7 +86,7 @@ def main():
             fixture.write_text(json.dumps({'port':int(pgport.rsplit(':',1)[1]),'ca':(path/'server.crt').read_text(),
                 'untrustedCa':(path/'untrusted.crt').read_text(),'baoOrigin':'https://'+baoport,
                 'baoCa':docker('exec',bao,'cat','/tmp/canvas-tls/vault-ca.pem'),'baoToken':token,'baoFileToken':file_token}))
-            def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage,pg],check=True,cwd=ROOT,timeout=30)
+            def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage,pg],check=True,cwd=ROOT,env=env,timeout=30)
             node('initial')
             subprocess.run(['node',str(ROOT/'test/connector-oauth-runtime-contract.mjs'),str(fixture),pg,bao],check=True,cwd=ROOT,env=env,timeout=60)
             subprocess.run(['node',str(ROOT/'test/observation-outbox-contract.mjs'),str(fixture),pg],check=True,cwd=ROOT,env=env,timeout=60)

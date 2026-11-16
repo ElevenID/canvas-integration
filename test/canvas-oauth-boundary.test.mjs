@@ -14,6 +14,9 @@ const mutations = [
   ['oauth-core-import', 'src/canvas-oauth.mjs', source => source + "\nimport { createGatewayClient } from './gateway-client.mjs';\n"],
   ['oauth-state-hash-removed', 'src/canvas-oauth.mjs', source => source.replace('stateHash: stateHash(state),', 'stateHash: state,')],
   ['oauth-one-time-consume-removed', 'src/canvas-oauth.mjs', source => source.replaceAll('repository.consumeAuthorization', 'repository.readAuthorization')],
+  ['oauth-durable-begin-removed', 'src/canvas-oauth.mjs', source => source.replaceAll('beginAuthorizationExchange', 'unreviewedBegin')],
+  ['oauth-atomic-staging-removed', 'src/canvas-oauth.mjs', source => source.replaceAll('stageAuthorizationResult', 'unreviewedPut')],
+  ['oauth-unsafe-token-cleanup', 'src/canvas-oauth.mjs', source => source + '\n// forbidden flow: vault.delete(org, ref)\n'],
 ];
 
 for (const [name, path, mutate] of mutations) {

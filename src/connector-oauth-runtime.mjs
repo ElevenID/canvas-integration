@@ -40,17 +40,28 @@ export async function createConnectorOAuthRuntime(configuration) {
       // production role approval. Actual DDL/role provisioning is owner-only.
       const result = await pool.query(`SELECT NOT EXISTS (
         SELECT 1 FROM (VALUES
-          ('platforms','SELECT'),('secrets','SELECT'),('secrets','INSERT'),('secrets','DELETE'),
+          ('platforms','SELECT'),('secrets','SELECT'),('secrets','INSERT'),
           ('authorizations','SELECT'),('authorizations','INSERT'),('authorizations','DELETE'),
           ('oauth_status','SELECT'),('oauth_status','INSERT'),('oauth_status','UPDATE'),
           ('connections','SELECT'),('connections','INSERT'),('connections','UPDATE'),
+          ('authorization_attempts','SELECT'),('authorization_attempts','INSERT'),('authorization_attempts','UPDATE'),
           ('oauth_http_limit','SELECT')) AS required(name,privilege)
         WHERE NOT has_table_privilege(current_user,'canvas_connector.'||required.name,required.privilege)
       ) AND has_any_column_privilege(current_user,'canvas_connector.platforms','UPDATE')
+        AND has_column_privilege(current_user,'canvas_connector.secrets','created_at','UPDATE')
+        AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger WHERE
+          tgrelid='canvas_connector.secrets'::regclass AND tgname='secret_creation_time'
+          AND tgfoid='canvas_connector.keep_secret_created_at()'::regprocedure
+          AND NOT tgisinternal AND tgenabled IN ('O','A') AND tgtype=19
+          AND tgqual IS NULL AND tgnargs=0 AND tgattr=''::int2vector)
         AND has_column_privilege(current_user,'canvas_connector.oauth_http_limit','hits','UPDATE')
         AND has_column_privilege(current_user,'canvas_connector.oauth_http_limit','window_started_at','UPDATE')
         AND has_function_privilege(current_user,'canvas_connector.consume_oauth_http_limit()','EXECUTE')
-        AND has_function_privilege(current_user,'canvas_connector.consume_authorization(text,text)','EXECUTE')
+        AND has_function_privilege(current_user,'canvas_connector.consume_authorization_attempt(text,text)','EXECUTE')
+        AND has_function_privilege(current_user,'canvas_connector.begin_authorization_exchange(text,text,text)','EXECUTE')
+        AND has_function_privilege(current_user,'canvas_connector.require_authorization_reconciliation(text,text,text)','EXECUTE')
+        AND has_function_privilege(current_user,'canvas_connector.publish_authorization_connection(text,text,text)','EXECUTE')
+        AND has_function_privilege(current_user,'canvas_connector.stage_authorization_result(text,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamp with time zone)','EXECUTE')
         AND has_function_privilege(current_user,'canvas_connector.mark_authorization_pending(text,text,bigint,text)','EXECUTE') AS ready`);
       if (result?.rows?.length !== 1 || result.rows[0].ready !== true) throw unavailable();
       const policy = await pool.query('SELECT request_limit,window_ms,hits FROM canvas_connector.oauth_http_limit WHERE singleton=true');

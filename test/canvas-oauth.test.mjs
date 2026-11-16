@@ -23,6 +23,7 @@ function fixture(overrides = {}) {
   let sequence = 0;
   const authorizations = new Map();
   const connections = new Map();
+  const attempts = new Map();
   const secrets = new Map([[CLIENT_SECRET_REF, CLIENT_SECRET]]);
   const saved = [];
   const deleted = [];
@@ -49,18 +50,32 @@ function fixture(overrides = {}) {
       return overrides.markPending ? overrides.markPending() : org === ORG && id === PLATFORM && version === platform.configVersion;
     },
     async cancelAuthorization(hash) { authorizations.delete(hash); },
-    async consumeAuthorization(hash, time, browserBindingHash) {
+    async consumeAuthorizationAttempt(hash, browserBindingHash) {
       const value = authorizations.get(hash);
-      if (!value || value.browserBindingHash!==browserBindingHash || value.expiresAt <= time) return null;
+      if (!value || value.browserBindingHash!==browserBindingHash || value.expiresAt <= now) return null;
       authorizations.delete(hash);
+      attempts.set(hash,{...value,phase:'consumed'});
       return value;
     },
-    async publishConnection(value, version) {
-      calls.push(['publish', value, version]);
-      if (overrides.publish) return overrides.publish(value, version);
-      if (version !== platform.configVersion || connections.has(ORG + ':' + PLATFORM)) return false;
-      connections.set(ORG + ':' + PLATFORM, value);
-      return true;
+    async beginAuthorizationExchange(hash,org,id) {
+      calls.push(['begin',hash,org,id]);
+      if(overrides.begin) return overrides.begin();
+      const a=attempts.get(hash);
+      if(!a || a.phase!=='consumed' || a.organizationId!==org || a.platformId!==id
+          || a.platformConfigVersion!==platform.configVersion || !platform.enabled || platform.archived
+          || a.expiresAt<=now || connections.size || [...attempts.values()].some(v=>['exchanging','staged','reconciliation_required'].includes(v.phase))) return false;
+      a.phase='exchanging';return true;
+    },
+    async requireAuthorizationReconciliation(hash) {
+      calls.push(['reconcile',hash]);const a=attempts.get(hash);
+      if(a && ['exchanging','staged','reconciliation_required'].includes(a.phase)) a.phase='reconciliation_required';
+    },
+    async publishAuthorizationConnection(hash,org,id) {
+      const a=attempts.get(hash);const value={...a,status:'connected'};
+      calls.push(['publish',value,a?.platformConfigVersion]);
+      if (overrides.publish) return overrides.publish(value,a?.platformConfigVersion);
+      if (a?.phase!=='staged' || org!==ORG || id!==PLATFORM || a.platformConfigVersion!==platform.configVersion || connections.has(ORG + ':' + PLATFORM)) return false;
+      connections.set(ORG + ':' + PLATFORM,value);a.phase='published';return true;
     },
     async markConnected(org, id, version, clientId, capabilities, scopes) {
       calls.push(['connected', org, id, version, clientId, capabilities, scopes]);
@@ -82,6 +97,16 @@ function fixture(overrides = {}) {
       secrets.set(ref, value);
       saved.push({ secretRef: ref, purpose: metadata.purpose, value });
       return ref;
+    },
+    async stageAuthorizationResult(a,bundle,expiresAt) {
+      if(overrides.stage) return overrides.stage(a,bundle,expiresAt);
+      const accessTokenRef='secret-token-'+(++sequence);
+      const refreshTokenRef=bundle.refreshToken?'secret-token-'+(++sequence):null;
+      secrets.set(accessTokenRef,bundle.accessToken);
+      saved.push({secretRef:accessTokenRef,purpose:'oauth_access_token',value:bundle.accessToken});
+      if(refreshTokenRef) {secrets.set(refreshTokenRef,bundle.refreshToken);saved.push({secretRef:refreshTokenRef,purpose:'oauth_refresh_token',value:bundle.refreshToken});}
+      Object.assign(attempts.get(a.authorizationId),{accessTokenRef,refreshTokenRef,tokenExpiresAt:expiresAt,phase:'staged'});
+      return {accessTokenRef,refreshTokenRef};
     },
     async delete(org, ref) {
       assert.equal(org, ORG);
@@ -105,7 +130,7 @@ function fixture(overrides = {}) {
     randomBytes: size => Buffer.alloc(size, 7),
   });
   return {
-    lifecycle, repository, vault, provider, authorizations, connections,
+    lifecycle, repository, vault, provider, authorizations, connections, attempts,
     saved, deleted, revoked, calls, platform, secrets,
     setNow(value) { now = value; },
   };
@@ -270,35 +295,24 @@ test('configuration race cancels the pending state', async () => {
   assert.equal(f.authorizations.size, 0);
 });
 
-test('token storage failure cleans earlier token refs and revokes exchanged access token', async () => {
-  const f = fixture();
-  const originalPut = f.vault.put;
-  let count = 0;
-  f.vault.put = async (...args) => {
-    if (++count === 2) throw new Error('synthetic storage failure');
-    return originalPut(...args);
-  };
-  const { state } = await started(f);
-  const result = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state, code: 'synthetic-code' });
-  assert.equal(new URL(result.location).searchParams.get('error_code'), 'oauth_secret_storage_failed');
-  assert.deepEqual(f.deleted, ['secret-token-1']);
-  assert.equal(f.revoked.length, 1);
+test('atomic token staging failure retains the attempt without inline deletion or revocation', async () => {
+  const f = fixture({stage:async()=>{throw Error('synthetic unknown staging outcome');}});
+  const {state}=await started(f);
+  const result=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+  assert.equal(new URL(result.location).searchParams.get('error_code'),'oauth_connection_reconciliation_required');
+  assert.deepEqual(f.deleted,[]);assert.deepEqual(f.revoked,[]);
+  assert.equal([...f.attempts.values()][0].phase,'reconciliation_required');
+  assert.equal(f.secrets.size,1);
 });
 
-test('failed connection insert cleans secrets, but uncertain insert preserves them for reconciliation', async () => {
-  const denied = fixture({ publish: async () => false });
-  const first = await started(denied);
-  const conflict = await denied.lifecycle.callback({ browserBinding:BROWSER_BINDING, state: first.state, code: 'synthetic-code' });
-  assert.equal(new URL(conflict.location).searchParams.get('error_code'), 'oauth_authorization_conflict');
-  assert.deepEqual(denied.deleted, ['secret-token-1', 'secret-token-2']);
-  assert.equal(denied.revoked.length, 1);
-
-  const uncertain = fixture({ publish: async () => { throw new Error('commit acknowledgment lost'); } });
-  const second = await started(uncertain);
-  const result = await uncertain.lifecycle.callback({ browserBinding:BROWSER_BINDING, state: second.state, code: 'synthetic-code' });
-  assert.equal(new URL(result.location).searchParams.get('error_code'), 'oauth_connection_reconciliation_required');
-  assert.deepEqual(uncertain.deleted, []);
-  assert.equal(uncertain.revoked.length, 0);
+test('rejected and uncertain publication retain staged tokens for explicit reconciliation', async () => {
+  for(const publish of [async()=>false,async()=>{throw Error('synthetic lost reply');}]) {
+    const f=fixture({publish});const {state}=await started(f);
+    const result=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+    assert.match(new URL(result.location).searchParams.get('error_code'),/^oauth_(authorization_conflict|connection_reconciliation_required)$/);
+    assert.deepEqual(f.deleted,[]);assert.deepEqual(f.revoked,[]);assert.equal(f.secrets.size,3);
+    assert.equal([...f.attempts.values()][0].phase,'reconciliation_required');
+  }
 });
 
 test('post-publication platform race preserves durable tokens and marks reauthorization', async () => {
@@ -309,6 +323,70 @@ test('post-publication platform race preserves durable tokens and marks reauthor
   assert.equal(f.connections.size, 1);
   assert.deepEqual(f.deleted, []);
   assert.equal(f.calls.some(item => item[0] === 'reauthorization'), true);
+});
+
+test('lost consumption or begin reply never sends the authorization code to Canvas', async () => {
+  for(const method of ['consumeAuthorizationAttempt','beginAuthorizationExchange']) {
+    const f=fixture();const {state}=await started(f);
+    const original=f.repository[method];
+    f.repository[method]=async(...args)=>{await original(...args);throw Error('synthetic lost acknowledgment');};
+    const result=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+    assert.equal(new URL(result.location).searchParams.get('error_code'),'oauth_connection_reconciliation_required');
+    assert.equal(f.calls.some(v=>v[0]==='exchange'),false);
+    assert.equal(f.connections.size,0);assert.equal(f.secrets.size,1);
+    assert.equal([...f.attempts.values()][0].phase,method==='consumeAuthorizationAttempt'?'consumed':'reconciliation_required');
+    f.repository[method]=original;
+    const replay=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+    assert.equal(new URL(replay.location).searchParams.get('error_code'),'oauth_state_invalid');
+  }
+});
+
+test('lost staging or publication reply preserves committed refs and never repeats exchange', async () => {
+  for(const method of ['stageAuthorizationResult','publishAuthorizationConnection']) {
+    const f=fixture();const {state}=await started(f);
+    const owner=method==='stageAuthorizationResult'?f.vault:f.repository;
+    const original=owner[method];
+    owner[method]=async(...args)=>{await original(...args);throw Error('synthetic lost acknowledgment');};
+    const result=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+    assert.equal(new URL(result.location).searchParams.get('error_code'),'oauth_connection_reconciliation_required');
+    const attempt=[...f.attempts.values()][0];
+    assert.equal(attempt.phase,method==='stageAuthorizationResult'?'reconciliation_required':'published');
+    assert.equal(f.secrets.get(attempt.accessTokenRef),ACCESS_TOKEN);
+    assert.equal(f.secrets.get(attempt.refreshTokenRef),REFRESH_TOKEN);
+    assert.deepEqual(f.deleted,[]);assert.deepEqual(f.revoked,[]);
+    const replay=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+    assert.equal(new URL(replay.location).searchParams.get('error_code'),'oauth_state_invalid');
+    assert.equal(f.calls.filter(v=>v[0]==='exchange').length,1);
+  }
+});
+
+test('exchange failure parks uncertainty without cleanup even when reconciliation is unavailable', async () => {
+  for(const unavailable of [false,true]) {
+    const f=fixture({exchange:async()=>{throw Error('sensitive provider body');}});
+    if(unavailable) f.repository.requireAuthorizationReconciliation=async()=>{throw Error('sensitive database body');};
+    const {state}=await started(f);
+    const result=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+    assert.equal(new URL(result.location).searchParams.get('error_code'),'oauth_token_exchange_failed');
+    assert.doesNotMatch(result.location,/sensitive/);
+    assert.equal([...f.attempts.values()][0].phase,unavailable?'exchanging':'reconciliation_required');
+    assert.deepEqual(f.deleted,[]);assert.deepEqual(f.revoked,[]);
+    const replay=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+    assert.equal(new URL(replay.location).searchParams.get('error_code'),'oauth_state_invalid');
+    assert.equal(f.calls.filter(v=>v[0]==='exchange').length,1);
+  }
+});
+
+test('false exchange admission and malformed staging refs never publish or clean custody', async () => {
+  const denied=fixture({begin:async()=>false});const first=await started(denied);
+  const response=await denied.lifecycle.callback({browserBinding:BROWSER_BINDING,state:first.state,code:'synthetic-code'});
+  assert.equal(new URL(response.location).searchParams.get('error_code'),'oauth_authorization_conflict');
+  assert.equal(denied.calls.some(v=>v[0]==='exchange'),false);
+  for(const refs of [{accessTokenRef:CLIENT_SECRET_REF,refreshTokenRef:null},{accessTokenRef:'a',refreshTokenRef:'a'},{accessTokenRef:'a'}]) {
+    const f=fixture({stage:async()=>refs});const {state}=await started(f);
+    const result=await f.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+    assert.equal(new URL(result.location).searchParams.get('error_code'),'oauth_connection_reconciliation_required');
+    assert.equal(f.calls.some(v=>v[0]==='publish'),false);assert.deepEqual(f.deleted,[]);assert.deepEqual(f.revoked,[]);
+  }
 });
 
 test('callback response never reflects caller-controlled redirect or error text', async () => {
