@@ -3,6 +3,7 @@
 // binding, current configuration, fresh pinned JWKS and atomic nonce consumption.
 import { createPublicKey, verify, constants } from 'node:crypto';
 import { parsePrivateJson } from './private-json.mjs';
+import { canvasId } from './canvas-rest-contract.mjs';
 
 const CLAIM = 'https://purl.imsglobal.org/spec/lti/claim/';
 const VOCAB = 'http://purl.imsglobal.org/vocab/';
@@ -136,8 +137,13 @@ export function validateCanvasResourceLinkLaunch({ token, jwksText, expected, no
     }
     if (roles.length && !roles.some(role => knownRoles.has(role))) invalid();
     const contextId = own(claims, CLAIM + 'context') ? text(object(claims[CLAIM + 'context']).id) : null;
+    // Only the provider-signed substitution is accepted. No numeric fallback
+    // from sub, login hints, email, roles or browser request fields.
+    const custom=own(claims,CLAIM+'custom')?object(claims[CLAIM+'custom']):null;
+    const canvasUserId=custom && own(custom,'canvas_user_id')?canvasId(custom.canvas_user_id):undefined;
     return Object.freeze({ issuer, clientId, deploymentId, subject, nonce, issuedAt, expiresAt, notBefore,
-      targetLinkUri, resourceLinkId, contextId, messageType: 'LtiResourceLinkRequest', version: '1.3.0' });
+      targetLinkUri, resourceLinkId, contextId, messageType: 'LtiResourceLinkRequest', version: '1.3.0',
+      ...(canvasUserId===undefined?{}:{canvasUserId}) });
   } catch {
     // Never reflect bearer claims, trusted configuration, keys or crypto errors.
     throw new Error('invalid_lti_launch');

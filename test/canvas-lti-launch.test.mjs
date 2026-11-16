@@ -30,6 +30,20 @@ function input(overrides = {}) {
 }
 function denied(value) { assert.throws(() => validateCanvasResourceLinkLaunch(value), /^Error: invalid_lti_launch$/); }
 
+test('only the signed Canvas numeric substitution can supplement the opaque provider subject',()=>{
+  for(const [value,normalized] of [['18446744073709551615','18446744073709551615'],[42,'42']]) {
+    const body=claims();body[C+'custom']={canvas_user_id:value,email:'ignored@example.invalid',unrelated:'ignored'};
+    const result=validateCanvasResourceLinkLaunch(input({token:token(body)}));
+    assert.equal(result.canvasUserId,normalized);assert.equal(result.subject,'canvas-subject');
+    assert.equal(result.email,undefined);assert.equal(result.custom,undefined);
+  }
+  for(const value of [null,{},[],true,'0','01','-1','1.1','18446744073709551616','$Canvas.user.id',9007199254740992]) {
+    const body=claims();body[C+'custom']={canvas_user_id:value};denied(input({token:token(body)}));
+  }
+  const body=claims();body.sub='42';body.canvas_user_id='99';
+  assert.equal(validateCanvasResourceLinkLaunch(input({token:token(body)})).canvasUserId,undefined);
+});
+
 test('valid resource launch returns only frozen protocol identifiers; ignores future claims', () => {
   const result = validateCanvasResourceLinkLaunch(input());
   assert.deepEqual(result, { issuer: expected.issuer, clientId: expected.clientId,

@@ -52,7 +52,7 @@ def main():
               platform_version,registration_version,registration_snapshot,nonce) ON canvas_connector.lti_launch_states TO lti_runtime;
             GRANT UPDATE(phase,token_hash,protocol_claims,accepted_at) ON canvas_connector.lti_launch_states TO lti_runtime;
             GRANT INSERT(state_hash,launch_id,token_hash,receipt) ON canvas_connector.lti_launch_receipts TO lti_runtime;
-            GRANT EXECUTE ON FUNCTION canvas_connector.lti_visible_identifier(text),canvas_connector.lti_numeric_date(jsonb),
+            GRANT EXECUTE ON FUNCTION canvas_connector.lti_visible_identifier(text),canvas_connector.lti_numeric_date(jsonb),canvas_connector.lti_canvas_user_id(text),
              canvas_connector.lti_claims_match(jsonb,canvas_connector.lti_registrations,canvas_connector.platforms,text),
              canvas_connector.begin_lti_launch(uuid,bigint,bigint,text,text,text,uuid),
              canvas_connector.stage_lti_launch(text,text,jsonb),canvas_connector.confirm_lti_launch(text,text,text) TO lti_runtime;""")
@@ -193,6 +193,7 @@ def main():
             outcomes = list(pool.map(lambda token: stage(competing, token, claims), ['a' * 64, 'e' * 64]))
         assert sum(bool(value) for value in outcomes) == 1, 'only the original token intent may stage'
         subprocess.run(['node', str(ROOT / 'test/lti-launch-state-contract.mjs'), name], check=True, cwd=ROOT)
+        subprocess.run(['node', str(ROOT / 'test/lti-provider-identity-contract.mjs'), name], check=True, cwd=ROOT)
         subprocess.run(['node', str(ROOT / 'test/lti-registration-admin-contract.mjs'), name], check=True, cwd=ROOT)
         if len(sys.argv)==3 and sys.argv[1]=='--browser-fixture':
             subprocess.run(['node',str(ROOT/'test/lti-browser-fixture.mjs'),name,sys.argv[2]],check=True,cwd=ROOT)
