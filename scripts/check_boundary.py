@@ -19,6 +19,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/canvas-rest-network.mjs': {'node:net', './canvas-rest-contract.mjs', 'node:dns/promises'},
  'src/canvas-rest-reader.mjs': {'./canvas-rest-network.mjs', './canvas-rest-contract.mjs', 'node:https'},
  'src/configuration.mjs': {'node:fs/promises', './gateway-client.mjs'},
+ 'src/connector-https-service.mjs': {'node:https', './oauth-admin-http.mjs', './oauth-callback-http.mjs'},
  'src/encrypted-vault.mjs': {'node:crypto'},
  'src/gateway-admin-auth.mjs': {'node:https'},
  'src/gateway-client.mjs': {'./operations.mjs', 'node:https'},
@@ -79,6 +80,7 @@ def audit(root: Path) -> list[str]:
      './canvas-oauth-provider': './src/canvas-oauth-provider.mjs',
      './canvas-rest': './src/canvas-rest-reader.mjs',
      './configuration': './src/configuration.mjs',
+     './connector-https-service': './src/connector-https-service.mjs',
      './encrypted-vault': './src/encrypted-vault.mjs',
      './gateway-admin-auth': './src/gateway-admin-auth.mjs',
      './observation-outbox': './src/observation-outbox.mjs',
@@ -99,6 +101,15 @@ def audit(root: Path) -> list[str]:
             "browser": "./src/browser-denied.mjs", "node": target,
             "default": "./src/browser-denied.mjs"}:
             errors.append(f"server-only export boundary changed: {name}")
+    service = (root / "src/connector-https-service.mjs").read_text()
+    for invariant in ("import { createServer } from 'node:https';", "minVersion: 'TLSv1.2'",
+                      "maxHeaderSize: 16384", "hosts[0] !== origin.host", "request.rawHeaders.length > 128",
+                      "inFlight.size >= maxConcurrentRequests", "inFlight.add(work)",
+                      "await Promise.allSettled([...inFlight])"):
+        if invariant not in service:
+            errors.append("connector inbound HTTPS boundary invariant missing")
+    if len(re.findall(r"from ['\"]node:https['\"]", service)) != 1:
+        errors.append("outbound transport forbidden in inbound connector service")
     client = (root / "src/gateway-client.mjs").read_text()
     for invariant in ("rejectUnauthorized: true", "agent: false", "'X-API-Key': apiKey",
                       "'X-Organization-ID': organizationId", "redirect_denied", "operation_not_allowed"):

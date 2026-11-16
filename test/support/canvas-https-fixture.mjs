@@ -14,14 +14,15 @@ export async function httpsFixture() {
       '-keyout', join(directory, 'key.pem'), '-out', join(directory, 'cert.pem'), '-days', '1',
       '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost']);
     const ca = await readFile(join(directory, 'cert.pem'), 'utf8');
+    const key = await readFile(join(directory, 'key.pem'));
     const seen = [];
     let handler = (_req, res) => { res.writeHead(500); res.end(); };
-    const server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: ca }, (req, res) => {
+    const server = createServer({ key, cert: ca }, (req, res) => {
       seen.push({ url: req.url, method: req.method, headers: { ...req.headers } });
       handler(req, res);
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    return { ca, origin: `https://localhost:${server.address().port}`, seen,
+    return { ca, key, origin: `https://localhost:${server.address().port}`, seen,
       setHandler(value) { seen.length = 0; handler = value; },
       async close() { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); } };
   } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }

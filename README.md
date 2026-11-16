@@ -29,22 +29,22 @@ bind callbacks to the initiating browser, a fixed connector URI and platform con
 and store client/access/refresh secrets only through an injected
 connector-owned vault adapter. See `docs/OAUTH_PROVIDER.md`.
 
-**OAuth HTTP routes and production storage are not yet wired.** The lifecycle
-requires connector-owned transactional repository and encrypted-vault adapters;
-it has no in-memory or plaintext fallback. Refresh scheduling, durable token
-revocation, LTI launch verification, AGS/NRPS and the administration UI remain
-separate extraction stages.
+The server-only HTTPS service now mounts OAuth administration and callback
+handlers. Connector-owned PostgreSQL, encrypted vault and OpenBao adapters,
+durable observation delivery and REST capture have isolated contracts. See
+[HTTPS service](docs/HTTPS_SERVICE.md) for listener configuration and shutdown.
 
-**This is not yet a standalone Canvas LTI service or a completed extraction.**
-The Gateway compatibility client still addresses existing Canvas APIs. The REST
-reader is not wired into the live worker. LTI/OAuth, AGS/NRPS, connector storage,
-scheduling and administration pages still need extraction. No deployment is cut
-over, and the original Marty-ui implementation is retained for qualification.
+**Standalone deployment and extraction remain incomplete.** Production credential
+loading, rate-limiting, full server/storage/provider composition, worker scheduling,
+LTI/AGS/NRPS and administration pages still need work. The compatibility Gateway
+client addresses existing Canvas APIs until their replacement is qualified.
+No deployment is cut over; the original Marty implementation remains for
+qualification and subsequent retirement.
 
 ## Test
 
-Use Node.js 22.16 or later, Python 3 and OpenSSL. No npm dependencies, Marty
-checkout, cloud services or real credentials are needed.
+Use Node.js 22.16 or later, Python 3 and OpenSSL. Install the pinned npm
+dependencies below. Tests need no Marty checkout, cloud services or real credentials.
 
 ```sh
 npm ci --ignore-scripts --omit=optional --no-audit --no-fund
@@ -92,7 +92,7 @@ const platforms = await client.execute('listCanvasPlatforms');
 
 Management operations require explicitly replacing `allowedOperations` with
 reviewed operation names. Creates additionally require a caller-persisted
-`idempotencyKey` (16ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“128 safe characters), reused for the same logical request.
+`idempotencyKey` (16-128 safe characters), reused for the same logical request.
 There are **no automatic write retries**. A network failure can leave the result
 unknown: reconcile through a read before retrying. Header preservation is
 covered here; actual Gateway idempotency remains an integration acceptance gate.

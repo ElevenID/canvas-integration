@@ -99,6 +99,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/rest-capture.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./connector-https-service": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/connector-https-service.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
