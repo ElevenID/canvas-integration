@@ -71,3 +71,23 @@ No public Gateway route, API-key scope, core database migration or Canvas produc
 The service tests cover state hashing and one-time consumption, tenant/platform/configuration binding, fixed callback/completion URLs, exact capability-derived scopes, secret-reference-only persistence, token cleanup, uncertain commit reconciliation and post-publication races.
 
 The provider tests use an actual local HTTPS server with temporary certificates. They verify form payloads, redirect rejection, TLS verification, pinned private test addresses, bounded responses and absolute timeouts. These tests do not claim live Canvas compatibility or production secret-vault qualification.
+
+## Connector callback HTTP adapter
+
+The server-only `./oauth-callback-http` export provides a Node HTTP request
+handler for GET `/oauth/callback`. Supply the OAuth lifecycle, a fixed HTTPS
+completion URL without query or fragment, and an explicit rate limiter whose
+`consume(remoteAddress)` method returns true only when admitted. Limiter errors
+fail closed. Forwarded IP headers are not trusted; deployments behind a proxy
+must apply their own authenticated ingress rate limits as well.
+
+The handler bounds the raw request target to 8 KiB, rejects request bodies,
+unknown or duplicate decoded query parameters, invalid UTF-8/percent encoding,
+and simultaneous code/error results. Completion redirects are restricted to the
+configured origin and path with typed result parameters. Responses have empty
+bodies, no-store, no-referrer, and closed connections. The module does not log;
+server/proxy access logs MUST omit callback query strings. Configure TLS,
+header/time limits and ingress rate limits on the enclosing server/proxy.
+
+This adapter is not a deployed server. The administrator start endpoint,
+production repository/vault and refresh/revocation workers remain required.
