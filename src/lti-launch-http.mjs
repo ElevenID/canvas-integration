@@ -23,7 +23,7 @@ function parameters(source, allowed) {
 async function form(request, max, allowed) {
   const type = rawHeaders(request, 'content-type'), length = rawHeaders(request, 'content-length');
   if (type.length !== 1 || !/^application\/x-www-form-urlencoded(?:;\s*charset=(?:utf-8|"utf-8"))?$/i.test(type[0]) ||
-      length.length !== 1 || !/^[1-9][0-9]{0,5}$/.test(length[0]) || Number(length[0]) > max ||
+      length.length !== 1 || !/^(?:0|[1-9][0-9]{0,5})$/.test(length[0]) || Number(length[0]) > max ||
       rawHeaders(request, 'transfer-encoding').length || rawHeaders(request, 'content-encoding').length) throw Error('invalid_lti_request');
   const body = await new Promise((resolve, reject) => {
     const chunks = [];let size = 0, settled = false;
@@ -42,6 +42,7 @@ async function form(request, max, allowed) {
   });
   return parameters(body, allowed);
 }
+export { form as readLtiHttpForm };
 export function createLtiLaunchHandler({ lifecycle, rateLimiter, publicOrigin } = {}) {
   let origin;
   try { origin = new URL(publicOrigin); } catch { throw Error('invalid_lti_http_configuration'); }

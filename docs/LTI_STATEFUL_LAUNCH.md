@@ -3,8 +3,8 @@
 This branch implements connector-owned protocol state and inbound LTI
 login/launch/confirmation/resource handlers. The HTTPS service can explicitly
 embed this lifecycle; the production OAuth runtime/CLI does not compose it yet,
-so its deployment still has no enabled LTI endpoint. Registration administration,
-production runtime/CLI/preflight and actual TLS PostgreSQL-role composition remain
+so its deployment still has no enabled LTI endpoint. Registration administration
+is implemented in this draft; production runtime/CLI/preflight and actual TLS PostgreSQL-role composition remain
 required before this draft can merge. Canonical Gateway learner association and
 deployed end-to-end qualification remain full-goal requirements.
 
@@ -20,6 +20,24 @@ The role remains trusted application SQL: its selected state/receipt INSERT and
 phase UPDATE grants do not constitute a tenant or JWT-verification sandbox. The
 application verifies provider signatures and Gateway authority; this database
 never grants canonical Marty identity, verification or issuance authority.
+
+Migration013 adds immutable registration administration receipts. The opt-in
+administration adapter authenticates and rechecks `integration-connector:edit`
+through the public Gateway session API, deriving organization and actor from
+that response. Caller-supplied identity, network policy and target URLs are
+rejected. Create and replace leave registrations inactive; activation requires
+current platform and registration revisions and the operator-selected Canvas
+trust policy. Deactivation remains available after platform closure. The target
+resource URL is derived from the configured connector origin and registration ID.
+Self-managed origins require an independent server allowlist.
+
+Operation UUIDs bind the original actor, scope and normalized intent. Concurrent
+retries return one original receipt; changed intent conflicts. Historical replay
+precedes current configuration checks but still requires current Gateway
+permission. SQL checks final postimages and audit rows, rolling back trigger
+rewrites. A lost commit reply is recovered using the original operation UUID.
+Catalog reads use bounded keyset pagination. These configuration grants belong to
+the trusted administration application role; they add no Core authority.
 
 The lifecycle reads a trusted registration, requires the unsigned login issuer to
 match its server-selected profile, generates independent random state, nonce and
@@ -55,6 +73,11 @@ through a test-only docker/psql adapter and a real loopback verified-TLS Canvas
 JWKS/JWT peer. Lost begin/confirm replies reconcile original IDs and receipts.
 This is not production PostgreSQL TLS-driver or browser qualification; those tests
 must be added to the existing physical composition before activation.
+The same suite exercises the administration adapter against a verified-TLS
+Gateway-session peer and a constrained PostgreSQL role, including tenant/actor
+and permission fences, eight-way operation replay, NULL SQL arguments, stale
+revisions, trigger rollback, lost replies, disabled-platform deactivation and
+catalog pagination.
 
 The HTTP adapter uses a per-state __Host cookie with Secure, HttpOnly,
 SameSite=None and Partitioned attributes. Cookie-free iframe launches use the

@@ -192,6 +192,7 @@ def main():
             outcomes = list(pool.map(lambda token: stage(competing, token, claims), ['a' * 64, 'e' * 64]))
         assert sum(bool(value) for value in outcomes) == 1, 'only the original token intent may stage'
         subprocess.run(['node', str(ROOT / 'test/lti-launch-state-contract.mjs'), name], check=True, cwd=ROOT)
+        subprocess.run(['node', str(ROOT / 'test/lti-registration-admin-contract.mjs'), name], check=True, cwd=ROOT)
         if len(sys.argv)==3 and sys.argv[1]=='--browser-fixture':
             subprocess.run(['node',str(ROOT/'test/lti-browser-fixture.mjs'),name,sys.argv[2]],check=True,cwd=ROOT)
         print('LTI PostgreSQL16 state, 8-way receipt replay, browser/token fences, ABA, rollback and least-privilege contracts passed')
