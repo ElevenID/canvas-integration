@@ -57,9 +57,9 @@ durable uncertain work; it never authorizes repeating an OAuth exchange.
 Startup checks selected table/function privileges and row-lock capabilities and
 reads the current connector encryption key before scheduling. It performs no
 DDL, grants, queue claims or provider calls before that preflight succeeds.
-Full installation uses owner migrations 001–007; revocation uses 001, refresh
+Full installation uses owner migrations 001–009; revocation uses 001, refresh
 also requires the secret timestamp lock guard 006, and capture/delivery use 002–003.
-The HTTP/recovery process has its own remaining migration requirements.
+The HTTP process also requires connection and platform administration migrations.
 
 The physical synthetic worker role has only selected connector tables/functions,
 token-column updates and immutable-ID/timestamp row-lock grants. It cannot create

@@ -40,10 +40,12 @@ An expired never-started claim no longer blocks: its expired lease cannot begin 
 old exchange, and its durable record is retained. Unknown refresh outcomes still
 need operator disposition; this API never guesses that an exchange failed.
 
-Install owner migrations001–008 before starting the updated HTTP process. Startup
+Install owner migrations001–009 before starting the updated HTTP process. Startup
 requires the new operation table/function, connection DELETE, four refresh metadata
 SELECT columns (organization_id/platform_id/phase/lease_until), and the enabled
-connection-identity, cleanup-fence and audit-immutability triggers. HTTP cannot
+connection-identity, cleanup-fence and audit-immutability triggers. The current
+process also checks the [platform administration](PLATFORM_ADMINISTRATION.md)
+privileges and revision/audit guards. HTTP cannot
 complete revocation jobs or delete secrets. Runtime never creates roles or grants.
 The worker keeps its separate role; it receives no connection-administration right.
 Trigger-shape and privilege readiness checks are not complete schema provenance or

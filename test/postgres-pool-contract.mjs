@@ -10,6 +10,7 @@ import { initialOAuthCustodyContract } from './initial-oauth-custody-contract.mj
 import { initialOAuthLifecycleContract } from './initial-oauth-lifecycle-contract.mjs';
 import { oauthAttemptRecoveryContract } from './oauth-attempt-recovery-contract.mjs';
 import { connectionAdministrationContract } from './connection-admin-contract.mjs';
+import { platformAdministrationContract } from './platform-admin-contract.mjs';
 
 const file=process.argv[2];const stage=process.argv[3];
 assert.match(file??'',/canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);
@@ -33,6 +34,9 @@ try {
   }});
   await initialOAuthLifecycleContract(pool,{keyProvider});
   await connectionAdministrationContract(pool,{ownerQuery:async sql=>{
+    execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
+  }});
+  await platformAdministrationContract(pool,{ownerQuery:async sql=>{
     execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
   }});
   await oauthAttemptRecoveryContract(pool,{keyProvider,ownerQuery:async sql=>{
