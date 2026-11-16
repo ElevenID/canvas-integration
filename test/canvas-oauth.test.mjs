@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
 import { createServer, request } from 'node:http';
 import { createOAuthCallbackHandler } from '../src/oauth-callback-http.mjs';
+import { createOAuthAdminHandler } from '../src/oauth-admin-http.mjs';
 import { oauthBrowserBindingCookieName } from '../src/oauth-browser-binding.mjs';
 const BROWSER_BINDING=Buffer.alloc(32,9).toString('base64url');
 
@@ -371,4 +372,33 @@ test('client secret platform metadata is enforced at start and callback',async()
   const result=await other.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
   assert.equal(new URL(result.location).searchParams.get('error_code'),'oauth_configuration_changed');
   assert.equal(other.calls.filter(c=>c[0]==='exchange').length,0);
+});
+
+test('authenticated start HTTP sets browser proof that completes its callback',async t=>{
+  const f=fixture();const server=createServer(createOAuthAdminHandler({
+    lifecycle:f.lifecycle,adminOrigin:'https://connector.example.test',rateLimiter:{consume:async()=>true},
+    authenticateAndAuthorize:async()=>({organizationId:ORG,authorized:true}),
+  }));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const started=await new Promise((resolve,reject)=>{
+    const req=request({host:'127.0.0.1',port:server.address().port,method:'POST',path:`/platforms/${PLATFORM}/oauth/start`,
+      headers:{Origin:'https://connector.example.test','Content-Type':'application/x-www-form-urlencoded'}},res=>{
+        let body='';res.on('data',chunk=>{body+=chunk;});res.on('end',()=>resolve({status:res.statusCode,body,headers:res.headers}));
+      });
+    req.on('error',reject);req.end(new URLSearchParams({client_id:'canvas-client',client_secret_ref:CLIENT_SECRET_REF,capabilities:'catalog'}).toString());
+  });
+  assert.equal(started.status,200);
+  const state=new URL(JSON.parse(started.body).authorizationUrl).searchParams.get('state');
+  const cookie=started.headers['set-cookie'][0].split(';')[0];
+  assert.equal(cookie.split('=')[0],oauthBrowserBindingCookieName(state));
+  const proof=cookie.split('=')[1];
+  assert.equal([...f.authorizations.values()][0].browserBindingHash,createHash('sha256').update(proof).digest('hex'));
+  assert.equal(started.body.includes(proof),false);
+  const callback=await callbackHttp(t,f.lifecycle);
+  assert.equal((await callback({state,code:'synthetic-victim-code'},null)).status,400);
+  assert.equal(f.authorizations.size,1);
+  const completed=await callback({state,code:'synthetic-real-code'},proof);
+  assert.equal(completed.location.searchParams.get('outcome'),'connected');
+  assert.equal(f.connections.size,1);
 });

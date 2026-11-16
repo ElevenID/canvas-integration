@@ -10,6 +10,10 @@ import { createRevocationWorker } from '../src/revocation-worker.mjs';
 import { createRefreshWorker } from '../src/refresh-worker.mjs';
 import { createCanvasOAuthProvider } from '../src/canvas-oauth-provider.mjs';
 import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
+import { createServer, request as httpRequest } from 'node:http';
+import { createOAuthAdminHandler } from '../src/oauth-admin-http.mjs';
+import { createOAuthCallbackHandler } from '../src/oauth-callback-http.mjs';
+import { createGatewayAdminAuthenticator } from '../src/gateway-admin-auth.mjs';
 
 const container = process.argv[2];
 assert.match(container ?? '', /^canvas-storage-test-[a-f0-9]{32}$/);
@@ -406,3 +410,64 @@ for(const mismatch of ['platform','purpose']) {
   assert.notEqual(await vault.metadata(job.organizationId,wrong),null);
 }
 console.log('Refresh/revocation workers never send wrong-platform or wrong-purpose secrets, and perform no deletion');
+
+// Real composed adapter flow: public Gateway auth -> start HTTP -> PostgreSQL
+// browser-bound state -> pinned Canvas HTTPS -> encrypted connection custody.
+{
+  const gateway=await httpsFixture();const canvas=await httpsFixture();let server;
+  const org='60000000-0000-4000-8000-000000000001';const publicOrigin='https://connector.example.test';
+  let permitted=true;let exchanges=0;
+  try {
+    gateway.setHandler((req,res)=>{
+      assert.equal(req.headers.cookie,'session=synthetic-admin-session-token');
+      assert.equal(req.headers['x-api-key'],undefined);assert.equal(req.headers['x-organization-id'],undefined);
+      if(req.url==='/v1/auth/me') json(res,{authenticated:true,user:{user_id:'synthetic-admin',organization_id:org}});
+      else {assert.equal(req.url,`/v1/organizations/${org}/members/me/permissions`);json(res,{permissions:permitted?['integration-connector:edit']:[]});}
+    });
+    canvas.setHandler((req,res)=>{
+      assert.equal(req.method,'POST');assert.equal(req.url,'/login/oauth2/token');
+      assert.equal(req.headers.cookie,undefined);assert.equal(req.headers['x-api-key'],undefined);
+      let raw='';req.on('data',chunk=>{raw+=chunk;});req.on('end',()=>{
+        const form=new URLSearchParams(raw);assert.equal(form.get('client_secret'),'synthetic-admin-client-secret');
+        assert.equal(form.get('code'),'synthetic-browser-code');exchanges++;
+        json(res,{access_token:'synthetic-admin-access-token',refresh_token:'synthetic-admin-refresh-token',expires_in:3600,token_type:'Bearer'});
+      });
+    });
+    await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled) VALUES ($1,'platform',$2,true) RETURNING id`,[org,canvas.origin]);
+    const client=await vault.put(org,{platformId:'platform',provider:'canvas',purpose:'oauth_client_secret'},'synthetic-admin-client-secret');
+    const lifecycle=createCanvasOAuthLifecycle({publicOrigin,completionUrl:publicOrigin+'/complete',repository,secretVault:vault,
+      provider:createCanvasOAuthProvider({allowedPrivateAddresses:['127.0.0.1','::1'],ca:canvas.ca})});
+    const start=createOAuthAdminHandler({lifecycle,adminOrigin:publicOrigin,rateLimiter:{consume:async()=>true},
+      authenticateAndAuthorize:createGatewayAdminAuthenticator({gatewayOrigin:gateway.origin,adminOrigin:publicOrigin,sessionCookieName:'session',ca:gateway.ca})});
+    const callback=createOAuthCallbackHandler({lifecycle,completionUrl:publicOrigin+'/complete',rateLimiter:{consume:async()=>true}});
+    server=createServer((request,response)=>request.url.startsWith('/oauth/callback')?callback(request,response):start(request,response));
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const send=(path,method,headers,body='')=>new Promise((resolve,reject)=>{
+      const request=httpRequest({host:'127.0.0.1',port:server.address().port,path,method,headers},response=>{
+        let output='';response.on('data',chunk=>{output+=chunk;});response.on('end',()=>resolve({status:response.statusCode,headers:response.headers,body:output}));
+      });request.on('error',reject);request.end(body);
+    });
+    const form=new URLSearchParams({client_id:'synthetic-client',client_secret_ref:client,capabilities:'catalog'}).toString();
+    const headers={Origin:publicOrigin,'Content-Type':'application/x-www-form-urlencoded',Cookie:'session=synthetic-admin-session-token'};
+    permitted=false;
+    const denied=await send('/platforms/platform/oauth/start','POST',headers,form);
+    assert.equal(denied.status,403);assert.equal(denied.headers['set-cookie'],undefined);
+    permitted=true;
+    const result=await send('/platforms/platform/oauth/start','POST',headers,form);assert.equal(result.status,200);
+    const authorization=new URL(JSON.parse(result.body).authorizationUrl);assert.equal(authorization.origin,canvas.origin);
+    const state=authorization.searchParams.get('state');const cookie=result.headers['set-cookie'][0].split(';')[0];
+    assert.equal(result.body.includes(cookie.split('=')[1]),false);
+    const path='/oauth/callback?'+new URLSearchParams({state,code:'synthetic-browser-code'});
+    const wrongBrowser=await send(path,'GET',{});assert.equal(wrongBrowser.status,400);assert.equal(exchanges,0);
+    const completed=await send(path,'GET',{Cookie:cookie});assert.equal(completed.status,303);
+    assert.equal(new URL(completed.headers.location).searchParams.get('outcome'),'connected');assert.equal(exchanges,1);
+    const durable=await repository.connection(org,'platform');assert.ok(durable);
+    assert.equal(await vault.get(org,durable.accessTokenRef,{platformId:'platform',provider:'canvas',purpose:'oauth_access_token'}),'synthetic-admin-access-token');
+    const replay=await send(path,'GET',{Cookie:cookie});assert.equal(replay.status,303);
+    assert.equal(new URL(replay.headers.location).searchParams.get('error_code'),'oauth_state_invalid');assert.equal(exchanges,1);
+    permitted=false;assert.equal((await send('/platforms/platform/oauth/start','POST',headers,form)).status,403);
+  } finally {
+    if(server) await new Promise(resolve=>server.close(resolve));await gateway.close();await canvas.close();
+  }
+}
+console.log('Public Gateway session/permission + HTTP start/callback + PostgreSQL browser binding + pinned Canvas + encrypted custody composition passed');
