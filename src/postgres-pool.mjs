@@ -68,7 +68,7 @@ export function createConnectorPostgresPool(configuration={}) {
   return Object.freeze({
     async query(text,values=[]) {
       if(closed || active>=maxConnections || typeof text!=='string' || Buffer.byteLength(text)>32768
-          || !/^\s*(SELECT|INSERT|UPDATE|DELETE)\b/i.test(text) || !Array.isArray(values) || values.length>64) throw unavailable();
+          || !/^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)\b/i.test(text) || !Array.isArray(values) || values.length>64) throw unavailable();
       active++;let client;let failed=true;
       try {
         client=await pool.connect();

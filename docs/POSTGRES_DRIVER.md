@@ -39,7 +39,7 @@ No custom certificate checker, plaintext transport or optional runtime transport
 is exposed. Use `npm ci --ignore-scripts --omit=optional --no-audit --no-fund`.
 
 Only `query(text,values)` and idempotent `close()` are exposed. Each statement uses
-extended protocol and must begin with SELECT/INSERT/UPDATE/DELETE. Stacked
+extended protocol and must begin with SELECT/INSERT/UPDATE/DELETE/WITH. The existing repository uses CTE-prefixed single-statement writes for connected/reauthorization state. Stacked
 statements are rejected by PostgreSQL; transaction-control and setup commands
 are not accepted. The driver verifies idle transaction status before and after
 each successful query, so repository state consumption commits before provider
@@ -73,7 +73,7 @@ has a 30-second watchdog. No existing database/configuration is consumed.
 
 The contract checks typed parameter round-trips and SQL-injection literals,
 verified TLS and current runtime role, cross-schema denial, stacked SQL and BEGIN
-rejection, actual repository consumption with eight concurrent callers and one
+rejection, actual repository publication/connected/reauthorization/disconnect writes and consumption with eight concurrent callers and one
 winner, wrong browser-proof rejection, ciphertext-only database custody, scoped
 secret reads, key rotation preserving historical decryptability, revoked-key
 read/write denial without deleting ciphertext, certificate/hostname/password

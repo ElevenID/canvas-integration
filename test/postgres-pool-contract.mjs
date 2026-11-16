@@ -44,6 +44,17 @@ try {
   assert.equal(await vault.get('driver-org',f.oldRef,scoped),'canvas-synthetic-access-one');
   const stored=(await pool.query('SELECT key_id,ciphertext,nonce,tag FROM canvas_connector.secrets WHERE reference=$1',[f.oldRef])).rows[0];
   assert.equal(stored.key_id,'canvas-key-one');assert.ok(Buffer.isBuffer(stored.ciphertext));
+  // Exercise actual repository CTE writes through this production transport,
+  // not only through the older psql bridge used for fault injection.
+  const connection={...authorization,accessTokenRef:f.oldRef,refreshTokenRef:null,tokenExpiresAt:now+3600000};
+  assert.equal(await repository.publishConnection(connection,1),true);
+  assert.equal(await repository.markConnected('driver-org','driver-platform',1,'synthetic-client',['catalog'],['read']),true);
+  await repository.markReauthorizationRequired('driver-org','driver-platform');
+  assert.equal((await repository.connection('driver-org','driver-platform')).status,'reauthorization_required');
+  assert.equal(await repository.markConnected('driver-org','driver-platform',1,'synthetic-client',['catalog'],['read']),false);
+  assert.equal(await repository.disconnect('driver-org','driver-platform'),true);
+  assert.equal(await repository.connection('driver-org','driver-platform'),null);
+
   assert.equal(stored.ciphertext.includes(Buffer.from('canvas-synthetic-access-one')),false);
   await assert.rejects(()=>vault.get('driver-org',f.oldRef,{...scoped,platformId:'foreign-platform'}),/connector_vault_unavailable/);
   await writeFile(file,JSON.stringify(f));
