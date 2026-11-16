@@ -5,6 +5,22 @@ import { createPublicKey, verify, constants } from 'node:crypto';
 import { parsePrivateJson } from './private-json.mjs';
 
 const CLAIM = 'https://purl.imsglobal.org/spec/lti/claim/';
+const VOCAB = 'http://purl.imsglobal.org/vocab/';
+const knownRoles = new Set();
+for (const [path, names] of Object.entries({
+  'lis/v2/system/person': 'Administrator None AccountAdmin Creator SysAdmin SysSupport User',
+  'lis/v2/institution/person': 'Administrator Faculty Guest None Other Staff Student Alumni Instructor Learner Member Mentor Observer ProspectiveStudent',
+  'lis/v2/membership': 'Administrator ContentDeveloper Instructor Learner Mentor Manager Member Officer',
+  'lti/system/person': 'TestUser',
+  'lis/v2/membership/Administrator': 'Administrator Developer ExternalDeveloper ExternalSupport ExternalSystemAdministrator Support SystemAdministrator',
+  'lis/v2/membership/ContentDeveloper': 'ContentDeveloper ContentExpert ExternalContentExpert Librarian',
+  'lis/v2/membership/Instructor': 'ExternalInstructor Grader GuestInstructor Lecturer PrimaryInstructor SecondaryInstructor TeachingAssistant TeachingAssistantGroup TeachingAssistantOffering TeachingAssistantSection TeachingAssistantSectionAssociation TeachingAssistantTemplate',
+  'lis/v2/membership/Learner': 'ExternalLearner GuestLearner Instructor Learner NonCreditLearner',
+  'lis/v2/membership/Manager': 'AreaManager CourseCoordinator ExternalObserver Manager Observer',
+  'lis/v2/membership/Member': 'Member',
+  'lis/v2/membership/Mentor': 'Advisor Auditor ExternalAdvisor ExternalAuditor ExternalLearningFacilitator ExternalMentor ExternalReviewer ExternalTutor LearningFacilitator Mentor Reviewer Tutor',
+  'lis/v2/membership/Officer': 'Chair Communications Secretary Treasurer Vice-Chair',
+})) for (const name of names.split(' ')) knownRoles.add(`${VOCAB}${path}#${name}`);
 const own = (value, key) => Object.hasOwn(value, key);
 const invalid = () => { throw new Error('invalid_lti_launch'); };
 function object(value) {
@@ -118,6 +134,7 @@ export function validateCanvasResourceLinkLaunch({ token, jwksText, expected, no
       const url = new URL(text(role, 2048));
       if (!['https:', 'http:', 'urn:'].includes(url.protocol) || url.username || url.password) invalid();
     }
+    if (roles.length && !roles.some(role => knownRoles.has(role))) invalid();
     const contextId = own(claims, CLAIM + 'context') ? text(object(claims[CLAIM + 'context']).id) : null;
     return Object.freeze({ issuer, clientId, deploymentId, subject, nonce, issuedAt, expiresAt,
       targetLinkUri, resourceLinkId, contextId, messageType: 'LtiResourceLinkRequest', version: '1.3.0' });

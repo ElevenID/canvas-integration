@@ -14,6 +14,12 @@ tolerance; the platform's longer expiration does not extend that age. JWTs are
 bounded to64KiB, JWKS to128KiB/32keys, JSON depth16 and RSA2048–8192bits. Anonymous
 launches and other message types, including Deep Linking, are unsupported here.
 Unknown payload claims are ignored; roles/names/email/service URLs are not returned.
+Nonempty roles must contain a standard AppendixA principal or sub-role, with
+custom role URIs allowed alongside it; empty roles are valid. Identifiers use a
+connector policy of nonempty visible ASCII without spaces, at most255characters;
+this is stricter than LTI's general ASCII compatibility allowance. Deprecated
+simple-name/URN role aliases are unsupported. These restrictions must be checked
+against real Canvas registrations before deployment.
 
 This primitive is not connected to the HTTPS runtime or exported from the package.
 It does not fetch JWKS, consume a nonce or authenticate a browser. The next adapter

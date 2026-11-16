@@ -57,6 +57,18 @@ test('multi audience requires explicit trusted audience and matching azp', () =>
   delete body.azp;
   denied(input({ token: token(body), expected: selected }));
 });
+test('nonempty roles require a standard principal or sub-role; custom extras carry no authority', () => {
+  const body = claims(); body[C + 'roles'] = ['https://example.invalid/custom-role'];
+  denied(input({ token: token(body) }));
+  for (const role of ['http://purl.imsglobal.org/vocab/lis/v2/membership/Instructor#TeachingAssistant',
+    'http://purl.imsglobal.org/vocab/lis/v2/institution/person#Student',
+    'http://purl.imsglobal.org/vocab/lis/v2/system/person#User']) {
+    body[C + 'roles'] = [role, 'https://example.invalid/custom-role'];
+    assert.ok(!Object.hasOwn(validateCanvasResourceLinkLaunch(input({ token: token(body) })), 'roles'));
+  }
+  body[C + 'roles'] = ['http://purl.imsglobal.org/vocab/lis/v2/membership#Invented'];
+  denied(input({ token: token(body) }));
+});
 const claimMutations = {
   issuer: body => { body.iss += '/'; }, audience: body => { body.aud = 'other'; },
   duplicateAudience: body => { body.aud = [expected.clientId, expected.clientId]; },
