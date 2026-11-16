@@ -48,8 +48,9 @@ export function ltiServiceAttempt(value) {
  if(value.dispatchId===null ? value.issuedAt!==null||value.expiresAt!==null
   : !ltiUuid(value.dispatchId)||!Number.isSafeInteger(value.issuedAt)||value.issuedAt<1||value.expiresAt!==value.issuedAt+120)invalid();
  if(value.phase==='prepared'&&value.dispatchId!==null||!['prepared','resolved'].includes(value.phase)&&value.dispatchId===null)invalid();
- if(['staged','published'].includes(value.phase)?!ltiUuid(value.tokenReference):value.tokenReference!==null)invalid();
+ if(value.phase==='resolved' ? value.tokenReference!==null&&!ltiUuid(value.tokenReference)
+  : ['staged','published'].includes(value.phase)?!ltiUuid(value.tokenReference):value.tokenReference!==null)invalid();
  const a={...value,scopes};
- if(value.phase==='published')a.receipt=ltiServiceReceipt(value.receipt,a);else if(value.receipt!==null)invalid();
+ if(value.phase==='published'||value.phase==='resolved'&&value.receipt!==null)a.receipt=ltiServiceReceipt(value.receipt,a);else if(value.receipt!==null)invalid();
  return Object.freeze(a);
 }

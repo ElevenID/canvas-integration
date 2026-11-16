@@ -47,12 +47,63 @@ is reconciled from the same attempt without repeating the provider call. Public
 receipts contain references, versions, scopes and expiry; they contain no token.
 Current token reads recheck configuration and expiry after OpenBao lookup.
 
-These stores/lifecycle are still unmounted. Operator resolution/revocation of
-unknown exchanges, token retention/expiry disposition, least-privilege startup
-preflight and administrator/capture/worker composition remain required. A staged
+These stores/lifecycle are still unmounted. Administrator/capture/worker composition
+and deployment retention policy remain required. A staged
 token or historical published receipt is not permission to read provider data or
 submit evidence; Gateway's current canonical binding/application checks remain
 mandatory in the later capture pipeline.
+
+## Recovery and expiry disposition
+
+Owner migration018 and `lti-service-recovery-store.mjs` provide actor-bound,
+original-operation receipts for three explicit actions. `abandon_prepared` resolves
+an unstarted attempt only while no dispatch or token exists. `retire_known` resolves
+a staged or published token only after its accepted provider TTL has elapsed from
+the later database ciphertext-custody timestamp. This retirement deadline is more
+conservative than the earlier usable deadline. Resolving retains the original
+ciphertext/reference and any published receipt; it never makes that token current.
+
+`resolve_unknown` requires a recorded external confirmation reference plus current
+version checks proving that the connector platform and registration are disabled
+and the tool key is deactivated. Its receipt explicitly records an **operator
+attestation**, not verified provider revocation. It does not reenable configuration.
+If an original in-flight response arrives afterward, its token still enters
+encrypted custody under the resolved attempt; that late custody cannot reopen
+dispatch, publication or token use. A competing stage that wins first makes the
+unknown-phase recovery CAS fail instead.
+
+Do not use the Canvas logout DELETE endpoint as proof of LTI credential revocation.
+At the reviewed [Canvas source checkpoint](https://github.com/instructure/canvas-lms/tree/1c9f0bb8013ed69c4f2efe11fd483025469b7e6c),
+the [LTI client-credentials issuer](https://github.com/instructure/canvas-lms/blob/1c9f0bb8013ed69c4f2efe11fd483025469b7e6c/lib/canvas/oauth/client_credentials_provider.rb)
+issues a token through the [developer key JWT signer](https://github.com/instructure/canvas-lms/blob/1c9f0bb8013ed69c4f2efe11fd483025469b7e6c/app/models/developer_key.rb),
+whereas [the logout-delete handler](https://github.com/instructure/canvas-lms/blob/1c9f0bb8013ed69c4f2efe11fd483025469b7e6c/app/controllers/oauth2_provider_controller.rb)
+destroys a user OAuth access-token object. This distinction supports the conservative
+recovery design; it does not qualify revocation behavior of a particular deployed
+Canvas version. No unknown-token expiry is inferred from a missing response.
+
+All recovery audits, tokens and original attempt history remain retained. This
+slice neither deletes operator data nor introduces an unattended purge. A deployed
+retention policy and any irreversible cleanup require their own owner provisioning
+and qualification within the remaining split work.
+
+## Service role capability checks
+
+`lti-service-preflight.mjs` is a read-only check for the role used by the service
+adapters. The physical contract provisions a disposable restricted role as the
+fixture owner, then runs the actual tool-key, token-store, TLS lifecycle and recovery
+contracts through that role. It grants required column operations and invoker
+functions without DDL, ownership, deletion, historical-field updates or access to
+unrelated tables. The adapter never creates roles, grants or migrations at startup.
+
+The check considers all MEMBER-reachable roles, including privileges available
+through a membership whose [PostgreSQL16 INHERIT option is false](https://www.postgresql.org/docs/16/sql-grant.html).
+It rejects elevated role flags, all MEMBER-reachable predefined PostgreSQL roles
+(including server-file/program capabilities), schema creation, missing required operations,
+unauthorized INSERT/UPDATE columns, disabled/malformed guards, definer functions,
+unexpected function paths/ownership and nonordinary service tables. This is a
+capability/guard check rather than complete owner-schema provenance verification
+or a SQL sandbox deriving tenants from JWTs. Production bootstrap must invoke it
+before mounting these adapters; that bootstrap composition is still unfinished.
 
 Tool keys are newly generated connector-owned RSA keys. They are separate from
 credential signing/issuance keys. The internal provisioning adapter encrypts
@@ -93,9 +144,8 @@ NRPS roles remain provider data. Missing data is not a canonical negative assert
 
 ## Durable work still required in this batch
 
-Finish operator key provisioning/rotation/deactivation and public JWK history;
-operator resolution and retention for uncertain service exchanges; current
-configuration/role preflight; least-privilege tests; LTI
+Finish public operator key/credential/recovery workflows and JWK history; deployed
+retention policy and startup preflight composition; LTI
 capture configuration and worker composition through the existing Gateway outbox;
 and operator receipt/unknown-provider resolution. An uncertain token exchange must
 not silently regenerate its attempt or assertion. Current registration, tool-key,

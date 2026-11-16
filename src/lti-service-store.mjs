@@ -90,7 +90,7 @@ export function createLtiServiceStore({pool,keyProvider}={}) {
     if(!bearer(accessToken)||supplied.dispatchId===null||scopes.some(scope=>!supplied.scopes.includes(scope))
      ||!Number.isSafeInteger(expiresAtMs)||expiresAtMs<=supplied.issuedAt*1000||expiresAtMs>(supplied.issuedAt+86400)*1000)unavailable();
     let a=await inspect({organizationId:supplied.organizationId,operationId:supplied.operationId});
-    if(a===null||JSON.stringify(identity(a))!==JSON.stringify(identity(supplied))||!['exchanging','uncertain','staged','published'].includes(a.phase))unavailable();
+    if(a===null||JSON.stringify(identity(a))!==JSON.stringify(identity(supplied))||!['exchanging','uncertain','staged','published','resolved'].includes(a.phase))unavailable();
     plaintext=Buffer.from(accessToken);
     const prior=await load(a);
     if(prior!==null) {
@@ -98,7 +98,7 @@ export function createLtiServiceStore({pool,keyProvider}={}) {
      // ciphertext reads. Reconcile its associated original attempt first.
      a=await inspect({organizationId:supplied.organizationId,operationId:supplied.operationId});
      if(a===null||JSON.stringify(identity(a))!==JSON.stringify(identity(supplied)))unavailable();
-     if(!['staged','published'].includes(a.phase)||a.tokenReference!==prior.reference)unavailable();
+     if(!['staged','published','resolved'].includes(a.phase)||a.tokenReference!==prior.reference)unavailable();
      key=keyCopy(await keyProvider.byId(prior.wrappingKeyId));computed=digest(key,a,{scopes,expiresAtMs},plaintext);
      if(prior.expiresAtMs!==expiresAtMs||JSON.stringify(prior.scopes)!==JSON.stringify(scopes)||!timingSafeEqual(computed,prior.inputDigest))return null;
      return a;
@@ -110,7 +110,7 @@ export function createLtiServiceStore({pool,keyProvider}={}) {
     const result=await one(`SELECT canvas_connector.stage_lti_service_token($1,$2::uuid,$3::uuid,$4::uuid,$5::text[],to_timestamp($6::float8/1000),$7,$8,$9,$10,$11) AS result`,
      [a.organizationId,a.operationId,a.dispatchId,row.reference,scopes,expiresAtMs,row.wrappingKeyId,computed,ciphertext,nonce,cipher.getAuthTag()]);
     if(result===null)return null;const staged=ltiServiceAttempt(result);
-    if(JSON.stringify(identity(staged))!==JSON.stringify(identity(a))||!['staged','published'].includes(staged.phase))unavailable();return staged;
+    if(JSON.stringify(identity(staged))!==JSON.stringify(identity(a))||!['staged','published','resolved'].includes(staged.phase))unavailable();return staged;
    }catch{unavailable();}finally{key?.fill(0);plaintext?.fill(0);computed?.fill(0);}
   },
   async publish(value) {
@@ -119,7 +119,7 @@ export function createLtiServiceStore({pool,keyProvider}={}) {
     if(a===null||a.dispatchId!==h.dispatchId)return null;
     const result=await one('SELECT canvas_connector.publish_lti_service_token($1,$2::uuid,$3::uuid) AS result',[h.organizationId,h.operationId,h.dispatchId]);
     if(result===null)return null;
-    const saved=await inspect(h);if(saved===null||saved.phase!=='published')unavailable();
+    const saved=await inspect(h);if(saved===null||!['published','resolved'].includes(saved.phase)||saved.receipt===null)unavailable();
     const decoded=ltiServiceReceipt(result,saved);if(JSON.stringify(decoded)!==JSON.stringify(saved.receipt))unavailable();return decoded;
    }catch{unavailable();}
   },

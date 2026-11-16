@@ -42,8 +42,8 @@ CREATE TABLE canvas_connector.lti_service_attempts (
   OR (dispatch_id IS NOT NULL AND issued_at IS NOT NULL AND assertion_expires_at=issued_at+120)),
  CHECK(phase<>'prepared' OR dispatch_id IS NULL),
  CHECK(phase IN ('prepared','resolved') OR dispatch_id IS NOT NULL),
- CHECK((phase IN ('staged','published'))=(token_reference IS NOT NULL)),
- CHECK((phase='published')=(receipt IS NOT NULL)),
+ CHECK(phase='resolved' OR (phase IN ('staged','published'))=(token_reference IS NOT NULL)),
+ CHECK(phase='resolved' OR (phase='published')=(receipt IS NOT NULL)),
  CHECK(receipt IS NULL OR jsonb_typeof(receipt)='object')
 );
 CREATE UNIQUE INDEX lti_service_unresolved ON canvas_connector.lti_service_attempts(organization_id,platform_id,registration_id)
@@ -62,6 +62,7 @@ CREATE TABLE canvas_connector.lti_service_tokens (
  nonce bytea NOT NULL CHECK(octet_length(nonce)=12),
  tag bytea NOT NULL CHECK(octet_length(tag)=16),
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ retire_after timestamptz NOT NULL CHECK(isfinite(retire_after) AND retire_after>created_at),
  PRIMARY KEY(organization_id,operation_id),
  UNIQUE(organization_id,operation_id,reference),
  FOREIGN KEY(organization_id,platform_id,registration_id,operation_id)
@@ -80,12 +81,17 @@ BEGIN
   OR NOT ((OLD.phase='prepared' AND NEW.phase IN ('exchanging','resolved'))
    OR (OLD.phase='exchanging' AND NEW.phase IN ('uncertain','staged','resolved'))
    OR (OLD.phase='uncertain' AND NEW.phase IN ('staged','resolved'))
-   OR (OLD.phase='staged' AND NEW.phase='published'))
+   OR (OLD.phase='staged' AND NEW.phase IN ('published','resolved'))
+   OR (OLD.phase='published' AND NEW.phase='resolved')
+   OR (OLD.phase='resolved' AND NEW.phase='resolved' AND OLD.dispatch_id IS NOT NULL
+    AND OLD.token_reference IS NULL AND NEW.token_reference IS NOT NULL))
   OR (OLD.phase<>'prepared' AND ROW(NEW.dispatch_id,NEW.issued_at,NEW.assertion_expires_at)
     IS DISTINCT FROM ROW(OLD.dispatch_id,OLD.issued_at,OLD.assertion_expires_at))
   OR (OLD.phase='prepared' AND NEW.phase='resolved' AND NEW.dispatch_id IS NOT NULL)
-  OR (NEW.phase NOT IN ('staged','published') AND (NEW.token_reference IS NOT NULL OR NEW.receipt IS NOT NULL))
-  OR (OLD.phase='staged' AND NEW.token_reference IS DISTINCT FROM OLD.token_reference) THEN
+  OR (NEW.phase NOT IN ('staged','published','resolved') AND (NEW.token_reference IS NOT NULL OR NEW.receipt IS NOT NULL))
+  OR (OLD.phase IN ('staged','published') AND NEW.token_reference IS DISTINCT FROM OLD.token_reference)
+  OR (NEW.phase='resolved' AND OLD.phase<>'resolved' AND ROW(NEW.token_reference,NEW.receipt) IS DISTINCT FROM ROW(OLD.token_reference,OLD.receipt))
+  OR (OLD.phase='resolved' AND NEW.receipt IS DISTINCT FROM OLD.receipt) THEN
   RAISE EXCEPTION 'Invalid LTI service attempt transition' USING ERRCODE='23514';
  END IF;
  NEW.updated_at:=clock_timestamp();RETURN NEW;
@@ -197,32 +203,38 @@ CREATE FUNCTION canvas_connector.stage_lti_service_token(org text,operation uuid
  wrapping_key text,digest bytea,encrypted bytea,iv bytea,authentication_tag bytea)
 RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog AS $$
 DECLARE a canvas_connector.lti_service_attempts; saved canvas_connector.lti_service_attempts;
- token canvas_connector.lti_service_tokens; started timestamptz:=clock_timestamp();
+ token canvas_connector.lti_service_tokens; started timestamptz:=clock_timestamp(); staged_clock timestamptz;
 BEGIN
  SELECT * INTO a FROM canvas_connector.lti_service_attempts WHERE organization_id=org AND operation_id=operation FOR UPDATE;
  IF NOT FOUND OR a.dispatch_id IS DISTINCT FROM dispatch OR dispatch IS NULL THEN RETURN NULL; END IF;
- IF a.phase IN ('staged','published') THEN
+ IF a.phase IN ('staged','published') OR (a.phase='resolved' AND a.token_reference IS NOT NULL) THEN
   IF NOT EXISTS(SELECT 1 FROM canvas_connector.lti_service_tokens t WHERE t.organization_id=org AND t.operation_id=operation
    AND t.granted_scopes=scopes AND t.expires_at=expiry AND t.wrapping_key_id=wrapping_key AND t.input_digest=digest) THEN RETURN NULL; END IF;
   RETURN canvas_connector.lti_service_attempt_view(a);
  END IF;
- IF a.phase NOT IN ('exchanging','uncertain') OR reference IS NULL OR NOT canvas_connector.lti_service_read_scopes(scopes)
+ -- A response already in flight when an operator resolves uncertainty still
+ -- enters encrypted custody, while the terminal resolution stays in force.
+ IF a.phase NOT IN ('exchanging','uncertain','resolved') OR reference IS NULL OR NOT canvas_connector.lti_service_read_scopes(scopes)
   OR NOT scopes<@a.requested_scopes OR expiry IS NULL OR NOT isfinite(expiry)
   OR expiry<=to_timestamp(a.issued_at) OR expiry>to_timestamp(a.issued_at)+interval '24 hours'
   OR wrapping_key IS NULL OR wrapping_key COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
   OR digest IS NULL OR octet_length(digest)<>32
   OR encrypted IS NULL OR octet_length(encrypted) NOT BETWEEN 16 AND 16386
   OR iv IS NULL OR octet_length(iv)<>12 OR authentication_tag IS NULL OR octet_length(authentication_tag)<>16 THEN RETURN NULL; END IF;
+ staged_clock:=clock_timestamp();
  INSERT INTO canvas_connector.lti_service_tokens(organization_id,platform_id,registration_id,operation_id,reference,granted_scopes,expires_at,
-  wrapping_key_id,input_digest,ciphertext,nonce,tag) VALUES(org,a.platform_id,a.registration_id,operation,reference,scopes,expiry,wrapping_key,digest,encrypted,iv,authentication_tag)
+  wrapping_key_id,input_digest,ciphertext,nonce,tag,created_at,retire_after)
+  VALUES(org,a.platform_id,a.registration_id,operation,reference,scopes,expiry,wrapping_key,digest,encrypted,iv,authentication_tag,
+   staged_clock,staged_clock+(expiry-to_timestamp(a.issued_at)))
   RETURNING * INTO token;
  IF ROW(token.organization_id,token.platform_id,token.registration_id,token.operation_id,token.reference,token.granted_scopes,token.expires_at,
   token.wrapping_key_id,token.input_digest,token.ciphertext,token.nonce,token.tag) IS DISTINCT FROM
   ROW(org,a.platform_id,a.registration_id,operation,reference,scopes,expiry,wrapping_key,digest,encrypted,iv,authentication_tag)
-  OR token.created_at<started OR token.created_at>clock_timestamp() THEN RAISE EXCEPTION 'LTI service token intent changed'; END IF;
- UPDATE canvas_connector.lti_service_attempts SET phase='staged',token_reference=reference
+  OR token.created_at IS DISTINCT FROM staged_clock OR token.created_at<started OR token.created_at>clock_timestamp()
+  OR token.retire_after IS DISTINCT FROM staged_clock+(expiry-to_timestamp(a.issued_at)) THEN RAISE EXCEPTION 'LTI service token intent changed'; END IF;
+ UPDATE canvas_connector.lti_service_attempts SET phase=CASE WHEN a.phase='resolved' THEN 'resolved' ELSE 'staged' END,token_reference=reference
   WHERE organization_id=org AND operation_id=operation RETURNING * INTO saved;
- IF saved.phase<>'staged' OR saved.token_reference IS DISTINCT FROM reference
+ IF saved.phase IS DISTINCT FROM (CASE WHEN a.phase='resolved' THEN 'resolved' ELSE 'staged' END) OR saved.token_reference IS DISTINCT FROM reference
   OR saved.updated_at<started OR saved.updated_at>clock_timestamp()
   OR (to_jsonb(saved)-ARRAY['phase','token_reference','updated_at']) IS DISTINCT FROM (to_jsonb(a)-ARRAY['phase','token_reference','updated_at'])
   OR NOT EXISTS(SELECT 1 FROM canvas_connector.lti_service_tokens t WHERE to_jsonb(t)=to_jsonb(token))
@@ -238,10 +250,10 @@ DECLARE a canvas_connector.lti_service_attempts; saved canvas_connector.lti_serv
 BEGIN
  SELECT * INTO a FROM canvas_connector.lti_service_attempts WHERE organization_id=org AND operation_id=operation;
  IF NOT FOUND OR dispatch IS NULL OR a.dispatch_id IS DISTINCT FROM dispatch THEN RETURN NULL; END IF;
- IF a.phase='published' THEN RETURN a.receipt; END IF;
+ IF a.phase IN ('published','resolved') AND a.receipt IS NOT NULL THEN RETURN a.receipt; END IF;
  IF NOT canvas_connector.lock_lti_service_configuration(a) THEN RETURN NULL; END IF;
  SELECT * INTO a FROM canvas_connector.lti_service_attempts WHERE organization_id=org AND operation_id=operation FOR UPDATE;
- IF a.phase='published' THEN RETURN a.receipt; END IF;
+ IF a.phase IN ('published','resolved') AND a.receipt IS NOT NULL THEN RETURN a.receipt; END IF;
  IF a.phase<>'staged' THEN RETURN NULL; END IF;
  SELECT * INTO token FROM canvas_connector.lti_service_tokens WHERE organization_id=org AND operation_id=operation AND reference=a.token_reference;
  IF NOT FOUND OR token.expires_at<=clock_timestamp() THEN RETURN NULL; END IF;
