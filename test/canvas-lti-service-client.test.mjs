@@ -149,3 +149,16 @@ test('verified TLS handshake expiry cannot flush either bearer headers or a clie
     assert.equal(messages,0,'no HTTP credential-bearing message was flushed');
   } finally {Date.now=realNow;}
 });
+
+test('asynchronous durable dispatch permit cannot extend the original assertion lifetime',async t=>{
+  const {peer,configuration}=await fixture(t),realNow=Date.now;let clock=realNow(),permits=0;
+  const input=requestInput();
+  const client=createCanvasLtiServiceClient({...configuration,async beforeTokenSend(){
+    permits++;await Promise.resolve();clock=input.expiresAt*1000+1;return true;
+  }});
+  Date.now=()=>clock;
+  try {
+    await assert.rejects(client.requestAccessToken(input),/expired_credential/);
+    assert.equal(permits,1);assert.equal(peer.seen.length,0);
+  } finally {Date.now=realNow;}
+});

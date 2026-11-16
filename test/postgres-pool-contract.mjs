@@ -14,6 +14,8 @@ import { platformAdministrationContract } from './platform-admin-contract.mjs';
 import { oauthClientProvisioningContract } from './oauth-client-provisioning-contract.mjs';
 import { captureRouteAdministrationContract } from './capture-route-admin-contract.mjs';
 import { ltiToolKeyContract } from './lti-tool-key-contract.mjs';
+import { ltiServiceStoreContract } from './lti-service-store-contract.mjs';
+import { ltiServiceLifecycleContract } from './lti-service-lifecycle-contract.mjs';
 
 const file=process.argv[2];const stage=process.argv[3];
 assert.match(file??'',/canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);
@@ -32,6 +34,12 @@ try {
  if(stage==='initial') {
   const container=process.argv[4];
   assert.match(container??'',/^canvas-pg-driver-[a-f0-9]{32}$/);
+  await ltiServiceLifecycleContract(pool,{keyProvider,ownerQuery:async sql=>{
+    execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
+  }});
+  await ltiServiceStoreContract(pool,{keyProvider,ownerQuery:async sql=>{
+    execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
+  }});
   await ltiToolKeyContract(pool,{keyProvider,ownerQuery:async sql=>{
     execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
   }});

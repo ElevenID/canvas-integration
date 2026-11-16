@@ -22,6 +22,38 @@ strings cannot be reliably erased, so callers must minimize retention and never
 log, serialize to operators, persist plaintext or return it over HTTP. Mutable
 temporary key/plaintext buffers are erased on both success and failure.
 
+Owner migration017 and the internal service store/lifecycle now persist a single
+original client-credentials attempt, configuration/key snapshot and database-issued
+assertion timestamps. Only the successful first dispatch claim may call Canvas.
+After verified TLS, a read-only durable permit check fences that original claim,
+expiry and current connector configuration before any HTTP credentials are sent.
+Expiry and the total operation deadline are checked again after the permit query.
+These are local admission/dispatch/publication fences; they cannot cancel an
+external request that was already transmitted when configuration changes later.
+
+An unknown exchange remains unresolved and blocks a replacement attempt for the
+registration. Retrying the same operation inspects its original state; it never
+regenerates the request UUID or repeats the provider exchange. Late successful
+responses are encrypted and staged even after configuration drift, while current
+revision and token expiry checks independently gate publication and later reads.
+Token lifetime is conservatively measured from the original database assertion
+issue time, including time spent in DNS, TLS and provider processing.
+
+Token AES-GCM context binds the original attempt, dispatch, tenant/platform/
+registration/client/origins/key revisions, exact granted scopes, token reference,
+expiry and wrapping-key ID. A separate domain-derived HMAC rejects changed-token
+or changed-scope/expiry staging replays. A lost staging/publication acknowledgment
+is reconciled from the same attempt without repeating the provider call. Public
+receipts contain references, versions, scopes and expiry; they contain no token.
+Current token reads recheck configuration and expiry after OpenBao lookup.
+
+These stores/lifecycle are still unmounted. Operator resolution/revocation of
+unknown exchanges, token retention/expiry disposition, least-privilege startup
+preflight and administrator/capture/worker composition remain required. A staged
+token or historical published receipt is not permission to read provider data or
+submit evidence; Gateway's current canonical binding/application checks remain
+mandatory in the later capture pipeline.
+
 Tool keys are newly generated connector-owned RSA keys. They are separate from
 credential signing/issuance keys. The internal provisioning adapter encrypts
 their private material under connector-owned OpenBao custody and returns only a
@@ -61,9 +93,9 @@ NRPS roles remain provider data. Missing data is not a canonical negative assert
 
 ## Durable work still required in this batch
 
-Implement versioned operator key provisioning/rotation/deactivation and immutable
-public key history; client-credentials attempt/ciphertext publication with uncertain
-reply handling; current configuration/role preflight; least-privilege tests; LTI
+Finish operator key provisioning/rotation/deactivation and public JWK history;
+operator resolution and retention for uncertain service exchanges; current
+configuration/role preflight; least-privilege tests; LTI
 capture configuration and worker composition through the existing Gateway outbox;
 and operator receipt/unknown-provider resolution. An uncertain token exchange must
 not silently regenerate its attempt or assertion. Current registration, tool-key,

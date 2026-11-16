@@ -27,7 +27,8 @@ export function createCanvasLtiServiceClient(configuration) {
   let origin,toolOrigin,key,allowed,ca,timeoutMs,maxBytes,maxPages;
   try {
     if(typeof globalThis.window!=='undefined')fail('server_only');
-    exactRecord(configuration,['canvasOrigin','toolOrigin','clientId','toolKey','ca','allowedPrivateAddresses','timeoutMs','maxResponseBytes','maxPages'],'invalid_configuration');
+    exactRecord(configuration,['canvasOrigin','toolOrigin','clientId','toolKey','ca','allowedPrivateAddresses','timeoutMs','maxResponseBytes','maxPages','beforeTokenSend'],'invalid_configuration');
+    if(configuration.beforeTokenSend!==undefined&&typeof configuration.beforeTokenSend!=='function')fail('invalid_configuration');
     origin=canvasOrigin(configuration.canvasOrigin);toolOrigin=new URL(configuration.toolOrigin);
     if(typeof configuration.toolOrigin!=='string'||toolOrigin.protocol!=='https:'||toolOrigin.origin!==configuration.toolOrigin||!visible(configuration.clientId))fail('invalid_configuration');
     toolOrigin=toolOrigin.origin;key=prepareLtiToolKey(configuration.toolKey);allowed=approvedPrivateAddresses(configuration.allowedPrivateAddresses);
@@ -35,7 +36,7 @@ export function createCanvasLtiServiceClient(configuration) {
     if(!Number.isInteger(timeoutMs)||timeoutMs<50||timeoutMs>120000||!Number.isInteger(maxBytes)||maxBytes<256||maxBytes>8388608
       ||!Number.isInteger(maxPages)||maxPages<1||maxPages>16||(ca!==undefined&&(typeof ca!=='string'||ca.length>65536||!ca.includes('-----BEGIN CERTIFICATE-----')||/PRIVATE KEY/.test(ca))))fail('invalid_configuration');
   }catch{fail('invalid_configuration');}
-  const clientId=configuration.clientId;
+  const clientId=configuration.clientId,beforeTokenSend=configuration.beforeTokenSend;
   async function operation(work,validUntil) {
     const expired=()=>validUntil!==undefined && Date.now()>=validUntil;
     if(expired())fail('expired_credential');
@@ -77,11 +78,18 @@ export function createCanvasLtiServiceClient(configuration) {
           // verification completes. A stalled handshake must not flush a body
           // or Authorization header after its original credential expires.
           req.once('socket',socket=>socket.once('secureConnect',()=>{
-            if(settled)return;
-            if(expired())return finish(new CanvasLtiServiceError('expired_credential'));
-            if(controller.signal.aborted)return finish(new CanvasLtiServiceError('timeout'));
-            if(socket.authorized!==true)return finish(new CanvasLtiServiceError('transport_error'));
-            req.end(body);
+            void(async()=>{
+              if(settled)return;
+              if(expired())fail('expired_credential');
+              if(controller.signal.aborted)fail('timeout');
+              if(socket.authorized!==true)fail('transport_error');
+              if(body!==undefined&&beforeTokenSend!==undefined&&await beforeTokenSend()!==true)fail('dispatch_denied');
+              // The durable permit query may itself cross expiry or timeout.
+              if(settled)return;
+              if(expired())fail('expired_credential');
+              if(controller.signal.aborted)fail('timeout');
+              req.end(body);
+            })().catch(error=>finish(error instanceof CanvasLtiServiceError?error:new CanvasLtiServiceError('dispatch_denied')));
           }));
         }catch(error){finish(error instanceof CanvasLtiServiceError?error:new CanvasLtiServiceError('unavailable'));}
       });
