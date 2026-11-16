@@ -256,7 +256,7 @@ export function createCanvasOAuthLifecycle(configuration) {
           || metadata.provider !== 'canvas' || metadata.purpose !== 'oauth_client_secret') {
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_configuration_changed') });
       }
-      const clientSecret = await vault.get(organizationId, authorization.clientSecretRef);
+      const clientSecret = await vault.get(organizationId, authorization.clientSecretRef, {platformId,provider:'canvas',purpose:'oauth_client_secret'});
       if (!safeText(clientSecret, 4096)) {
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_configuration_changed') });
       }
