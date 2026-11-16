@@ -1,0 +1,50 @@
+# Connector PostgreSQL storage
+
+`schema/001_oauth_storage.sql` is a transactional initial schema for a separate
+connector-owned database. It has no dependency on Marty databases or private
+service APIs. Organization identifiers are routing labels here; core grants,
+application authority and issuance decisions remain behind the public Gateway.
+
+The schema stores platform configuration, hashed OAuth authorization state,
+opaque vault references, connection metadata and durable revocation jobs.
+It stores neither Canvas tokens/client secrets nor ElevenID API-key secrets.
+Canvas origin canonicalization, scope/capability allowlists and secret-reference
+metadata validation remain required in the existing service layer.
+
+Platform updates increment a database-enforced version. Connection publication
+and rotation lock that platform and require its enabled state, origin and exact
+configuration version. A configuration change does not delete token references;
+the worker must mark the connection for reauthorization or durable revocation.
+Those cleanup transitions remain possible after platform disablement. Update
+operations must acquire platform locks before connection locks to avoid lock
+inversion. Treat deadlocks/serialization failures as conflicts, not permission
+to blindly retry a token exchange or uncertain commit.
+
+Call `canvas_connector.consume_authorization(hash)` inside a committed
+transaction before token exchange. It atomically deletes and returns at most
+one unexpired state, using the database clock. A rollback restores the state;
+therefore never perform provider network operations before this consumption
+commits. On an uncertain consumption commit, reconcile rather than exchanging
+the code speculatively. Expired rows require bounded periodic cleanup.
+
+One connection per organization/platform is enforced by its primary key.
+Publication needs an exact version compare-and-set and reconciliation by opaque
+references after an uncertain acknowledgment. Deleting or replacing a connection
+must enqueue revocation in the same transaction. Jobs intentionally survive
+connection deletion. Workers must use lease IDs and compare-and-set completion;
+the schema alone does not execute revocation or refresh tokens.
+
+PUBLIC receives no schema, table or function access. Deployment must provision
+distinct migration, administrator and worker roles with reviewed least-privilege
+grants, encrypted transport and connector-only database credentials. No runtime
+role provisioning or production migration registration is supplied here.
+
+Run `python3 scripts/test_postgres_storage.py` with local Docker. It creates a
+uniquely named PostgreSQL container from an immutable image, exposes no port,
+uses synthetic data and removes its own container. Tests cover expiry, replay,
+configuration fencing, immutable tenant identity, reference separation, durable
+revocation and eight concurrent consumers with exactly one state winner.
+
+This is the storage contract, not a complete production repository adapter.
+The JavaScript repository mapping, encrypted vault, administrative operations,
+refresh/revocation workers and deployed acceptance tests remain required.
