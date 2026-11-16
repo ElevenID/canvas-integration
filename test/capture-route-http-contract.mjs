@@ -65,7 +65,10 @@ export async function captureRouteHttpContract({send,address,organizationId,canv
   const concurrent={...create,operation_id:randomUUID(),binding_id:'managed-concurrent-binding'};
   bindings.set(concurrent.binding_id,{...record,id:concurrent.binding_id});
   const requests=await Promise.all(Array.from({length:8},()=>send(address,{path:'/platforms/managed-platform/capture-routes/concurrent/create',body:new URLSearchParams(concurrent).toString()}).response));
-  assert.ok(requests.every(response=>response.status===200));assert.ok(requests.every(response=>response.body===requests[0].body));
+  for(const [index,response] of requests.entries()) {
+    assert.equal(response.status,200,`concurrent capture create${index}; statuses=${requests.map(value=>value.status).join(',')}`);
+    assert.deepEqual(JSON.parse(response.body),JSON.parse(requests[0].body));
+  }
   assert.equal((await query('SELECT count(*)::integer AS n FROM canvas_connector.rest_route_operation_audit WHERE organization_id=$1 AND operation_id=$2',[organizationId,concurrent.operation_id])).rows[0].n,1);
   assert.ok(gateway.seen.every(item=>item.headers.cookie==='session=abcdefghijklmnop' && !item.headers['x-api-key'] && !item.headers.authorization));
   for(const item of gateway.seen.filter(item=>item.method==='POST')) assert.equal(item.headers.origin,'https://localhost');
