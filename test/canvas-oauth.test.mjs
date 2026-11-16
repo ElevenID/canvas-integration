@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
+import { createOAuthAdminHandler } from '../src/oauth-admin-http.mjs';
+import { createServer, request } from 'node:http';
 
 const ORG = 'org-one';
 const PLATFORM = 'platform-one';
@@ -113,6 +115,33 @@ async function started(value, capabilities = ['catalog', 'native_activity_scores
   const url = new URL(result.authorizationUrl);
   return { result, url, state: url.searchParams.get('state'), stored: [...value.authorizations.values()][0] };
 }
+
+test('authenticated admin HTTP start composes with the actual OAuth lifecycle', async t => {
+  const f = fixture();
+  const server = createServer(createOAuthAdminHandler({
+    lifecycle: f.lifecycle, adminOrigin: 'https://connector.example.test',
+    rateLimiter: { consume: async () => true },
+    authenticateAndAuthorize: async () => ({ organizationId: ORG, authorized: true }),
+  }));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const result = await new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port: server.address().port, method: 'POST',
+      path: `/platforms/${PLATFORM}/oauth/start`, headers: { Origin: 'https://connector.example.test',
+        'Content-Type': 'application/x-www-form-urlencoded' } }, res => {
+      let body = ''; res.on('data', chunk => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
+    });
+    req.on('error', reject);
+    req.end(new URLSearchParams({ client_id: 'canvas-client', client_secret_ref: CLIENT_SECRET_REF, capabilities: 'catalog' }).toString());
+  });
+  assert.equal(result.status, 200);
+  assert.equal(f.authorizations.size, 1);
+  const state = new URL(result.body.authorizationUrl).searchParams.get('state');
+  const callback = await f.lifecycle.callback({ state, code: 'synthetic-code' });
+  assert.equal(new URL(callback.location).searchParams.get('outcome'), 'connected');
+  assert.equal(f.connections.size, 1);
+});
 
 test('start stores only a hash and constructs a fixed Canvas authorization URL', async () => {
   const f = fixture();

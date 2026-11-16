@@ -11,6 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 IMPORTS = {
+    "src/oauth-admin-http.mjs": set(),
     "src/operations.mjs": set(),
     "src/browser-denied.mjs": set(),
     "src/gateway-client.mjs": {"node:https", "./operations.mjs"},
@@ -59,7 +60,8 @@ def audit(root: Path) -> list[str]:
     expected = {".": "./src/gateway-client.mjs", "./configuration": "./src/configuration.mjs",
                 "./canvas-rest": "./src/canvas-rest-reader.mjs",
                 "./canvas-oauth": "./src/canvas-oauth.mjs",
-                "./canvas-oauth-provider": "./src/canvas-oauth-provider.mjs"}
+                "./canvas-oauth-provider": "./src/canvas-oauth-provider.mjs",
+                "./oauth-admin-http": "./src/oauth-admin-http.mjs"}
     if set(package.get("exports", {})) != set(expected):
         errors.append("unexpected package export")
     for name, target in expected.items():
@@ -106,4 +108,4 @@ if __name__ == "__main__":
     if violations:
         print("Boundary check failed:\n" + "\n".join(violations), file=sys.stderr)
         sys.exit(1)
-    print("Boundary check passed: ten runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")
+    print("Boundary check passed: eleven runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")
