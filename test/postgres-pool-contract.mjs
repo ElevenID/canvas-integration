@@ -82,6 +82,21 @@ try {
   await assert.rejects(()=>vault.get('driver-org',f.oldRef,scoped),/connector_vault_unavailable/);
   await assert.rejects(()=>vault.put('driver-org',scoped,'must-not-persist'),/connector_vault_unavailable/);
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM canvas_connector.secrets')).rows[0].n,2);
+ } else if(stage==='trust-custody') {
+  let calls=0;
+  const trusted=createConnectorPostgresPool({...configuration,credentialProvider:{getPassword:async()=>{calls++;return 'synthetic-explicit-password';}}});
+  try {assert.equal((await trusted.query('SELECT current_user AS identity')).rows[0].identity,'canvas_runtime');assert.equal(calls,1);}
+  finally {await trusted.close();}
+  for(const getPassword of [async()=>{throw new Error('must-remain-private');},async()=>'',()=>new Promise(()=>{})]) {
+    const rejected=createConnectorPostgresPool({...configuration,connectTimeoutMs:150,credentialProvider:{getPassword}});
+    try {await denied(()=>rejected.query('SELECT 1'));} finally {await rejected.close();}
+  }
+  let aborted=false;
+  const late=createConnectorPostgresPool({...configuration,connectTimeoutMs:100,credentialProvider:{getPassword:({signal})=>new Promise(resolve=>{
+    signal.addEventListener('abort',()=>{aborted=true;},{once:true});setTimeout(()=>resolve('synthetic-late-password'),200);
+  })}});
+  try {await denied(()=>late.query('SELECT 1'));assert.equal(aborted,true);await new Promise(resolve=>setTimeout(resolve,250));}
+  finally {await late.close();}
  } else if(stage==='database-denied') {
   await denied(()=>pool.query('SELECT 1'));
  } else throw new Error('unknown_fixture_stage');

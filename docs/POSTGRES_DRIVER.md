@@ -24,7 +24,7 @@ const secretVault = createEncryptedVault({ pool, keyProvider: connectorOpenBaoKe
 ```
 
 The bootstrap must supply `getPassword({signal})` from connector-owned credential
-custody. A fresh password is requested per new physical connection. No password,
+custody. A fresh password is obtained and validated before each new physical connection, even if the server uses HBA trust and issues no password challenge. One acquisition deadline spans credentials plus the network/TLS handshake; closed/expired clients cannot connect on a late credential completion. Deployment must still configure password-authenticated HBA rules; this check does not manufacture server-side authentication. No password,
 URI or host is read from environment variables or a default configuration.
 Missing/empty/invalid credentials fail closed; there is no pgpass fallback.
 Database credentials belong only to this connector database. They must never be
@@ -77,7 +77,7 @@ rejection, actual repository consumption with eight concurrent callers and one
 winner, wrong browser-proof rejection, ciphertext-only database custody, scoped
 secret reads, key rotation preserving historical decryptability, revoked-key
 read/write denial without deleting ciphertext, certificate/hostname/password
-rejection, hanging credential lookup, query timeout/recovery, bounded overload,
+rejection, hanging credential lookup, HBA-trust custody enforcement (valid, failing, empty, hanging and late credentials), query timeout/recovery, bounded overload,
 hostile libpq defaults, idempotent shutdown and database outage. This is local
 composition evidence, not a deployed Canvas-to-Gateway-to-OB3 qualification.
 

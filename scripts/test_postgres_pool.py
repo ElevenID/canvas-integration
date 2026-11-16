@@ -86,6 +86,16 @@ def main():
             node('rotated')
             key('token','revoke',token)
             node('key-denied')
+            # Auth-ok without a password challenge must not bypass custody.
+            docker('exec','-i',pg,'sh','-c','cat > /tmp/canvas-trust-hba.conf',input=
+                'local all all trust\nhostssl all canvas_runtime all trust\nhostnossl all all all reject\n')
+            docker('exec',pg,'sh','-c',
+                'cat /tmp/canvas-trust-hba.conf "$PGDATA/pg_hba.conf" > /tmp/canvas-merged-hba.conf && cat /tmp/canvas-merged-hba.conf > "$PGDATA/pg_hba.conf"')
+            sql('SELECT pg_reload_conf();')
+            time.sleep(0.1)
+            if sql("SELECT auth_method FROM pg_hba_file_rules WHERE line_number=2")!='trust':
+                raise AssertionError('disposable trust-HBA fixture invalid')
+            node('trust-custody')
             docker('stop',pg)
             node('database-denied')
         print('Actual verified-TLS PostgreSQL driver/OpenBao/encrypted-vault composition and negative contracts passed')

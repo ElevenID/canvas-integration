@@ -20,15 +20,6 @@ export function createConnectorPostgresPool(configuration={}) {
       || typeof ca!=='string' || ca.length>65536 || !ca.includes('-----BEGIN CERTIFICATE-----') || /PRIVATE KEY/.test(ca)
       || !Number.isSafeInteger(maxConnections) || maxConnections<1 || maxConnections>16
       || !duration(connectTimeoutMs) || !duration(queryTimeoutMs)) throw unavailable();
-  const password=async()=>{
-    const controller=new AbortController();let timer;
-    try {
-      const secret=await Promise.race([credentialProvider.getPassword({signal:controller.signal}),
-        new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(unavailable());},connectTimeoutMs);})]);
-      if(controller.signal.aborted || typeof secret!=='string' || !secret.length || secret.length>4096 || /[\x00-\x1f\x7f]/.test(secret)) throw unavailable();
-      return secret;
-    } catch {throw unavailable();} finally {clearTimeout(timer);controller.abort();}
-  };
   // Explicit pure-JS Client import bypasses pg's environment-selected native entry.
   // Every connection parameter with an environment fallback is explicit/truthy.
   // binary=false is enforced on the resulting parameters because pg's val()
@@ -40,15 +31,29 @@ export function createConnectorPostgresPool(configuration={}) {
       this.binary=false;
     }
     connect(callback) {
-      // pg-pool drops a failed connection from its census without necessarily
-      // closing authentication/TLS-error sockets. Close before reporting error.
-      return super.connect(error=>{
+      const controller=new AbortController();let completed=false;let timer;
+      const stream=this.connection.stream;
+      const closed=()=>finish(unavailable());
+      const finish=error=>{
+        if(completed)return;completed=true;clearTimeout(timer);
+        stream.removeListener('close',closed);controller.abort();
+        // Pool error removal alone can leave failed authentication sockets open.
         if(error) this.connection.stream.destroy();
         callback(error);
-      });
+      };
+      stream.once('close',closed);
+      timer=setTimeout(()=>finish(unavailable()),connectTimeoutMs);
+      // Fetch even when the server requests no password (e.g. HBA trust).
+      // The same deadline covers credential acquisition and the TLS handshake.
+      Promise.resolve().then(()=>credentialProvider.getPassword({signal:controller.signal})).then(secret=>{
+        if(completed || controller.signal.aborted || stream.destroyed) return finish(unavailable());
+        if(typeof secret!=='string' || !secret.length || secret.length>4096 || /[\x00-\x1f\x7f]/.test(secret)) return finish(unavailable());
+        this.connectionParameters.password=this.password=secret;
+        super.connect(finish);
+      }).catch(()=>finish(unavailable()));
     }
   }
-  const pool=new PgPool({Client:ConnectorClient,host,port,database,user,password,
+  const pool=new PgPool({Client:ConnectorClient,host,port,database,user,password:()=>{throw unavailable();},
     ssl:{ca,rejectUnauthorized:true,minVersion:'TLSv1.2'},sslnegotiation:'postgres',
     options:'-c search_path=pg_catalog,canvas_connector',replication:'false',client_encoding:'UTF8',
     application_name:'elevenid-canvas-connector',fallback_application_name:'elevenid-canvas-connector',
