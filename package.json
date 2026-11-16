@@ -84,6 +84,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/postgres-pool.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./observations": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/observation-submit.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
