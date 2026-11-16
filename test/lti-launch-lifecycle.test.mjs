@@ -70,3 +70,15 @@ test('repository never reflects database errors containing private material', as
   const repo = createLtiLaunchRepository({ query: async () => { throw Error('private-token-and-sql'); } });
   await assert.rejects(repo.registration(registrationId), { message: 'lti_launch_repository_unavailable' });
 });
+test('unsigned target, client and deployment hints cannot replace registered values', async () => {
+  for (const override of [{ targetLinkUri:'https://attacker.invalid' },{ clientId:'other' },{ deploymentId:'other' }]) {
+    const repo=repository();let writes=0;repo.begin=async()=>{writes++;throw Error('unexpected_write');};
+    await assert.rejects(createLtiLaunchLifecycle({repository:repo,publicOrigin}).begin({registrationId,
+      issuer:'https://canvas.instructure.com',loginHint:'opaque',...override}),{message:'invalid_lti_request'});
+    assert.equal(writes,0);
+  }
+  const started=await createLtiLaunchLifecycle({repository:repository(),publicOrigin}).begin({registrationId,
+    issuer:'https://canvas.instructure.com',loginHint:'opaque',targetLinkUri:configuration.targetLinkUri,
+    clientId:configuration.clientId,deploymentId:configuration.deploymentId,storageTarget:'_parent'});
+  assert.equal(started.storageTarget,'_parent');
+});

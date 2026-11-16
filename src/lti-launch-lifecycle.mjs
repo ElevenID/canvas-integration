@@ -68,12 +68,15 @@ export function createLtiLaunchLifecycle(configuration) {
   }
   return Object.freeze({
     async begin(input) {
-      exactRecord(input, ['registrationId','issuer','loginHint','messageHint','storageTarget'], 'invalid_lti_request');
+      exactRecord(input, ['registrationId','issuer','loginHint','messageHint','storageTarget','targetLinkUri','clientId','deploymentId'], 'invalid_lti_request');
       const request = Object.freeze({ ...input });
-      if (!uuid(request.registrationId) || (request.storageTarget !== undefined && request.storageTarget !== 'post_message_forwarding')) fail('invalid_lti_request');
+      if (!uuid(request.registrationId) || (request.storageTarget !== undefined && !['_parent','post_message_forwarding'].includes(request.storageTarget))) fail('invalid_lti_request');
       const loginHint = hint(request.loginHint, true), messageHint = hint(request.messageHint);
       const found = await repository.registration(request.registrationId), r = found?.registration;
       if (!r?.enabled || !r.platformEnabled || r.platformArchived) fail('lti_registration_unavailable');
+      for (const name of ['targetLinkUri','clientId','deploymentId']) {
+        if (request[name] !== undefined && request[name] !== r[name]) fail('invalid_lti_request');
+      }
       const provider = reader(definition(r), r.registrationId);
       if (request.issuer !== provider.profile.issuer) fail('invalid_lti_request');
       const state = randomBytes(32).toString('base64url'), nonce = randomBytes(32).toString('base64url');
@@ -87,7 +90,7 @@ export function createLtiLaunchLifecycle(configuration) {
         client_id: r.clientId, redirect_uri: `${origin.origin}/lti/registrations/${r.registrationId}/launch`,
         state, nonce, login_hint: loginHint, ...(messageHint === undefined ? {} : { lti_message_hint: messageHint }) }).toString();
       return Object.freeze({ registrationId: r.registrationId, launchId, state, browserProof,
-        authorizationUrl: url.href, storageOrigin: new URL(provider.profile.authorizationEndpoint).origin,
+        authorizationUrl: url.href, storageOrigin: new URL(provider.profile.authorizationEndpoint).origin, canvasOrigin: provider.profile.canvasOrigin,
         storageTarget: request.storageTarget ?? null });
     },
     async stage(input) {
@@ -105,7 +108,14 @@ export function createLtiLaunchLifecycle(configuration) {
       }
       // This is a confirmation plan, never an authenticated session/identity.
       return Object.freeze({ registrationId: saved.state.registrationId, launchId: saved.state.launchId,
-        state: request.state, tokenHash, storageOrigin: new URL(provider.profile.authorizationEndpoint).origin });
+        state: request.state, tokenHash, storageOrigin: new URL(provider.profile.authorizationEndpoint).origin, canvasOrigin: provider.profile.canvasOrigin });
+    },
+    async browserContext(input) {
+      const { saved } = await context(input, ['registrationId','state']);
+      const provider = reader(saved.state.registrationSnapshot, saved.state.registrationId);
+      return Object.freeze({ registrationId: saved.state.registrationId, launchId: saved.state.launchId,
+        storageOrigin: new URL(provider.profile.authorizationEndpoint).origin, canvasOrigin: provider.profile.canvasOrigin,
+        phase: saved.state.phase, current: live(saved) });
     },
     async confirm(input) {
       const { saved, stateHash, request } = await context(input, ['registrationId','state','tokenHash','browserProof']);

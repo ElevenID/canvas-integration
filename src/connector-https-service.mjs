@@ -7,6 +7,7 @@ import { createConnectionAdminHandler } from './connection-admin.mjs';
 import { createPlatformAdminHandler } from './platform-admin.mjs';
 import { createOAuthClientHandler } from './oauth-client-admin.mjs';
 import { createCaptureRouteAdminHandler } from './capture-route-admin-http.mjs';
+import { createLtiLaunchHandler } from './lti-launch-http.mjs';
 
 const invalid = () => new Error('invalid_connector_service_configuration');
 const unavailable = () => new Error('connector_service_unavailable');
@@ -19,7 +20,7 @@ const pem = value => (typeof value === 'string' || Buffer.isBuffer(value))
 export function createConnectorHttpsService(configuration = {}) {
   if (typeof globalThis.window !== 'undefined' || !record(configuration)
       || Object.keys(configuration).some(key => !['publicOrigin', 'completionUrl', 'tls',
-        'host', 'port', 'maxConcurrentRequests', 'lifecycle', 'authenticateAndAuthorize', 'rateLimiter','recoveryStore','connectionStore','platformStore','clientStore','captureStore','readBinding'].includes(key))) throw invalid();
+        'host', 'port', 'maxConcurrentRequests', 'lifecycle', 'authenticateAndAuthorize', 'rateLimiter','recoveryStore','connectionStore','platformStore','clientStore','captureStore','readBinding','ltiLifecycle'].includes(key))) throw invalid();
   const { publicOrigin, completionUrl, tls, lifecycle, authenticateAndAuthorize, rateLimiter,
     host = '127.0.0.1', port = 8443, maxConcurrentRequests = 8 } = configuration;
   let origin;
@@ -30,10 +31,11 @@ export function createConnectorHttpsService(configuration = {}) {
       || !Number.isInteger(maxConcurrentRequests) || maxConcurrentRequests < 1 || maxConcurrentRequests > 32
       || !record(tls) || Object.keys(tls).sort().join(',') !== 'cert,key'
       || !pem(tls.cert) || !pem(tls.key)) throw invalid();
-  let admin, callback, recovery, connections, platforms, clients, captures, server;
+  let admin, callback, recovery, connections, platforms, clients, captures, lti, server;
   try {
     admin = createOAuthAdminHandler({ lifecycle, authenticateAndAuthorize, rateLimiter, adminOrigin: publicOrigin });
     callback = createOAuthCallbackHandler({ lifecycle, rateLimiter, completionUrl });
+    if(configuration.ltiLifecycle!==undefined) lti=createLtiLaunchHandler({lifecycle:configuration.ltiLifecycle,rateLimiter,publicOrigin});
     if(configuration.recoveryStore!==undefined) recovery=createOAuthAttemptRecoveryHandler({store:configuration.recoveryStore,
       authenticateAndAuthorize,rateLimiter,adminOrigin:publicOrigin});
     if(configuration.connectionStore!==undefined) connections=createConnectionAdminHandler({store:configuration.connectionStore,
@@ -60,6 +62,7 @@ export function createConnectorHttpsService(configuration = {}) {
     const hosts = request.rawHeaders.filter((_, i) => i % 2 === 1 && request.rawHeaders[i - 1].toLowerCase() === 'host');
     if (hosts.length !== 1 || hosts[0] !== origin.host) return finish(response, 421);
     if (typeof request.url !== 'string' || Buffer.byteLength(request.url) > 8192) return finish(response, 414);
+    if(lti && request.url.startsWith('/lti/registrations/')) return lti(request,response);
     if (request.url === '/oauth/callback' || request.url.startsWith('/oauth/callback?')) return callback(request, response);
     if (/^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/oauth\/start$/.test(request.url)) return admin(request, response);
     if(recovery && /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/oauth\/attempts\/(inspect|receipt|recover)$/.test(request.url)) return recovery(request,response);

@@ -1,10 +1,12 @@
 # Stateful Canvas launch implementation
 
-This branch implements the connector-owned protocol state beneath a future LTI
-HTTP endpoint. It is unfinished: registration administration, browser cookie and
-platform-storage bridges, request parsing/rate limits, production runtime/CLI
-composition, real browser tests and Gateway learner association remain required.
-No new endpoint, session, credential or deployment is activated by these modules.
+This branch implements connector-owned protocol state and inbound LTI
+login/launch/confirmation/resource handlers. The HTTPS service can explicitly
+embed this lifecycle; the production OAuth runtime/CLI does not compose it yet,
+so its deployment still has no enabled LTI endpoint. Registration administration,
+production runtime/CLI/preflight and actual TLS PostgreSQL-role composition remain
+required before this draft can merge. Canonical Gateway learner association and
+deployed end-to-end qualification remain full-goal requirements.
 
 Migration012 adds globally identified local registrations and immutable revisions,
 expiring launch state, and immutable acceptance receipts in the connector database.
@@ -54,10 +56,36 @@ JWKS/JWT peer. Lost begin/confirm replies reconcile original IDs and receipts.
 This is not production PostgreSQL TLS-driver or browser qualification; those tests
 must be added to the existing physical composition before activation.
 
-Browser integration must follow the [Canvas launch/storage flow](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.lti_launch_overview).
-The existing OAuth SameSite=Lax callback cookie does not establish binding for an
-LTI cross-site form POST. Support an explicit secure cookie policy and the trusted
-SSO-frame storage protocol with exact HTTPS target/response origin, WindowProxy,
-message ID and key checks. Never trust a client-side success flag or use wildcard
-postMessage targets. No resource may become available before server-side proof
-confirmation and one-time state consumption.
+The HTTP adapter uses a per-state __Host cookie with Secure, HttpOnly,
+SameSite=None and Partitioned attributes. Cookie-free iframe launches use the
+advertised SSO storage frame (or `_parent`) with exact HTTPS target/response
+origin, WindowProxy, response subject, message ID and key checks. The initial
+storage failure can attempt the cookie path; confirmation fails closed if neither
+proof transport succeeds. No wildcard postMessage target or client success flag
+is accepted. Reloads without cookies retrieve the same browser proof again before
+server-side current resource checks. No provider subject or raw claims appear in
+the resource page.
+
+Handlers require bounded UTF-8 form bodies with strict percent decoding, unique
+known fields and unambiguous headers. Limits are8192 URL bytes,20000 login body
+bytes,98304 launch bytes and2048 confirmation/resource bytes, with a5second body
+deadline. They consume the shared database-wide HTTP budget. Launch posts require
+the registered Canvas/SSO Origin; confirmation and resource posts require the exact
+connector Origin. A bridge page uses origin-only referrers: no-referrer made real
+browser form submissions emit Origin:null. Origin-only policy preserves those
+checks while excluding paths, state and proof from referrers; other replies use
+no-referrer. Pages have nonce-only scripts, no-store and restrictive CSP.
+
+The browser fixture and `test/lti-browser-contract.mjs` exercised nine Chromium
+scenarios against these production handlers/lifecycle/repository and real PG16:
+cross-site partitioned cookies; cookie-free storage; incorrect origin, frame,
+message ID, key and storage error; missing proof transports; replay after config
+closure; and lost acceptance reply recovery. Cookie-free cases suppress Set-Cookie
+at the test edge; browser certificates are synthetic and ignored by the isolated
+browser context, while the Node provider validates its peer CA. Database access
+still uses the test-only docker/psql adapter. These tests do not qualify the
+production TLS database driver, real Canvas, Gateway or OB3-wallet deployment.
+
+References: [Canvas launch/storage flow](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.lti_launch_overview),
+[Canvas postMessage API](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.lti_window_post_message),
+and [normative platform storage messages](https://www.imsglobal.org/spec/lti-pm-s/v0p1).
