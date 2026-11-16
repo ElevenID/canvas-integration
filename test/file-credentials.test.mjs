@@ -105,7 +105,8 @@ test('aborted acquisitions fail closed and bounded concurrent readers recover no
 // Exercise the actual provider state machine with controlled filesystem
 // dependencies. These probes establish deadline/cleanup flow, not OS cancellation.
 async function delayedFilesystem(mode) {
-  const source = await readFile(new URL('../src/file-credentials.mjs', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/private-file.mjs', import.meta.url), 'utf8');
+  const credentials = await readFile(new URL('../src/file-credentials.mjs', import.meta.url), 'utf8');
   const fakeSource = `
     const mode=${JSON.stringify(mode)};
     let openRelease,readRelease,entered,closed;
@@ -114,6 +115,7 @@ async function delayedFilesystem(mode) {
     export const state={opens:0,closes:0,buffers:[],releaseOpen:()=>openRelease(),releaseRead:()=>readRelease(),
       readEntered:new Promise(r=>{entered=r;}),closedAll:new Promise(r=>{closed=r;})};
     export const constants={O_RDONLY:0,O_NOFOLLOW:1,O_NONBLOCK:2};
+    export const realpath=async path=>path;
     const payload=Buffer.from(${JSON.stringify(TOKEN)});
     const stat={isFile:()=>true,nlink:1n,uid:BigInt(process.geteuid()),gid:1n,mode:0o100600n,
       size:BigInt(payload.length),dev:1n,ino:1n,mtimeNs:1n,ctimeNs:1n};
@@ -130,7 +132,10 @@ async function delayedFilesystem(mode) {
   const dependency = await import(fakeUrl);
   const changed = source.replace("from 'node:fs/promises'", 'from ' + JSON.stringify(fakeUrl));
   assert.notEqual(changed, source);
-  const actual = await import('data:text/javascript,' + encodeURIComponent(changed));
+  const readerUrl = 'data:text/javascript,' + encodeURIComponent(changed);
+  const wrapped = credentials.replace("from './private-file.mjs'", 'from ' + JSON.stringify(readerUrl));
+  assert.notEqual(wrapped, credentials);
+  const actual = await import('data:text/javascript,' + encodeURIComponent(wrapped));
   return { actual, state: dependency.state };
 }
 

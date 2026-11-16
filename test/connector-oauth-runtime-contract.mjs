@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname, basename, resolve, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { request } from 'node:https';
 import { setImmediate } from 'node:timers/promises';
 import { createConnectorPostgresPool } from '../src/postgres-pool.mjs';
@@ -74,6 +75,66 @@ const configuration = {
   http: { publicOrigin: origin, completionUrl: origin + '/complete', tls: { key: canvas.key, cert: canvas.ca }, port: 0 },
 };
 const runtimes = [];
+async function cliRuntime() {
+  const caPaths = {};
+  for (const [name, value] of Object.entries({ database: f.ca, vault: f.baoCa, canvas: canvas.ca, gateway: gateway.ca })) {
+    caPaths[name] = join(directory, `bootstrap-${name}-ca.pem`); await replacePrivate(caPaths[name], value);
+  }
+  const tlsKeyFile = join(directory, 'bootstrap-tls-key.pem'), tlsCertificateFile = join(directory, 'bootstrap-tls-cert.pem');
+  await replacePrivate(tlsKeyFile, canvas.key); await replacePrivate(tlsCertificateFile, canvas.ca);
+  const { ca: _databaseCa, credentialProvider: _passwordProvider, ...databaseOptions } = configuration.database;
+  const { ca: _keyCa, tokenProvider: _tokenProvider, ...keyOptions } = configuration.keyCustody;
+  const { ca: _canvasCa, ...canvasOptions } = configuration.canvas;
+  const { ca: _gatewayCa, ...gatewayOptions } = configuration.gatewayAuthentication;
+  const { tls: _tls, ...httpOptions } = configuration.http;
+  const configFile = join(directory, 'bootstrap-service.json');
+  await replacePrivate(configFile, JSON.stringify({ schemaVersion: 1,
+    database: { ...databaseOptions, passwordFile: httpPasswordFile, caFile: caPaths.database },
+    keyCustody: { ...keyOptions, tokenFile, caFile: caPaths.vault },
+    canvas: { ...canvasOptions, caFile: caPaths.canvas },
+    gatewayAuthentication: { ...gatewayOptions, caFile: caPaths.gateway },
+    http: { ...httpOptions, tlsKeyFile, tlsCertificateFile },
+  }));
+  const environment = Object.fromEntries(Object.entries({ PATH: process.env.PATH, HOME: process.env.HOME,
+    LANG: process.env.LANG, CANVAS_CONNECTOR_CONFIG_FILE: configFile }).filter(([, value]) => typeof value === 'string'));
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/serve-oauth.mjs', import.meta.url))],
+    { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '', pending = '', started = false, stopped = false, accept, reject, closing;
+  const listening = new Promise((resolve, fail) => { accept = resolve; reject = fail; });
+  void listening.catch(() => {});
+  const watchdog = setTimeout(() => { reject(Error('synthetic_cli_watchdog')); child.kill('SIGKILL'); }, 20000);
+  child.on('error', () => reject(Error('synthetic_cli_start_failed')));
+  child.stdout.on('data', chunk => {
+    stdout += chunk; pending += chunk;
+    if (Buffer.byteLength(stdout) > 4096) { reject(Error('synthetic_cli_output_bound')); child.kill('SIGKILL'); return; }
+    while (pending.includes('\n')) {
+      const index = pending.indexOf('\n'), line = pending.slice(0, index); pending = pending.slice(index + 1);
+      try {
+        const value = JSON.parse(line);
+        if (value.state === 'listening' && Number.isInteger(value.port)) { started = true; accept({ port: value.port }); }
+        else if (value.state === 'stopped') stopped = true;
+        else throw Error();
+      } catch { reject(Error('synthetic_cli_protocol_failed')); }
+    }
+  });
+  child.stderr.on('data', chunk => { stderr += chunk; if (Buffer.byteLength(stderr) > 4096) child.kill('SIGKILL'); });
+  const exited = new Promise(resolve => child.on('close', (code, signal) => {
+    clearTimeout(watchdog); if (!started) reject(Error(`synthetic_cli_start_failed: ${stderr}`)); resolve({ code, signal });
+  }));
+  const server = { listen: () => listening, close() {
+    if (closing) return closing;
+    if (child.exitCode === null && !child.killed) child.kill('SIGTERM');
+    closing = (async () => {
+      const outcome = await exited;
+      if (started) { assert.deepEqual(outcome, { code: 0, signal: null }); assert.equal(stopped, true); assert.equal(stderr, ''); }
+      for (const secret of [CLIENT, ACCESS, REFRESH, f.baoToken, f.baoFileToken]) {
+        if (secret) assert.equal(stdout.includes(secret) || stderr.includes(secret), false);
+      }
+    })();
+    return closing;
+  } };
+  runtimes.push(server); return server;
+}
 async function runtime(overrides = {}) {
   const value = await createConnectorOAuthRuntime({ ...configuration, ...overrides }); runtimes.push(value); return value;
 }
@@ -94,7 +155,11 @@ try {
   // Real concurrent callers, including a separate role/pool, share one budget.
   owner("UPDATE canvas_connector.oauth_http_limit SET request_limit=3,window_ms=60000,hits=0,window_started_at=clock_timestamp();");
   const limiter = createOAuthHttpRateLimiter(pool);
-  const admitted = await Promise.all(Array.from({ length: 8 }, () => limiter.consume('ignored-client-address')));
+  // Keep cold connection acquisitions within the file provider's four-read bound.
+  const admitted = [];
+  for (let batch = 0; batch < 2; batch++) {
+    admitted.push(...await Promise.all(Array.from({ length: 4 }, () => limiter.consume('ignored-client-address'))));
+  }
   assert.equal(admitted.filter(Boolean).length, 3);
   assert.equal((await pool.query('SELECT hits FROM canvas_connector.oauth_http_limit')).rows[0].hits, 3);
   owner("CREATE ROLE canvas_counter LOGIN PASSWORD 'synthetic-counter-password'; GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_counter; GRANT USAGE ON SCHEMA canvas_connector TO canvas_counter; GRANT SELECT ON canvas_connector.oauth_http_limit TO canvas_counter; GRANT UPDATE(hits,window_started_at) ON canvas_connector.oauth_http_limit TO canvas_counter; GRANT EXECUTE ON FUNCTION canvas_connector.consume_oauth_http_limit() TO canvas_counter;");
@@ -142,7 +207,7 @@ try {
     await assert.rejects(httpPool.query('SELECT * FROM canvas_connector.refresh_attempts'));
     assert.equal((await httpPool.query("SELECT has_schema_privilege(current_user,'canvas_connector','CREATE') AS allowed")).rows[0].allowed, false);
   } finally { await httpPool.close(); }
-  const server = await runtime(); const address = await server.listen();
+  const server = fileCustody ? await cliRuntime() : await runtime(); const address = await server.listen();
   const started = await send(address, { body: new URLSearchParams({ client_id: 'runtime-client', client_secret_ref: reference, capabilities: 'catalog' }).toString() }).response;
   assert.equal(started.status, 200);
   const authorization = new URL(JSON.parse(started.body).authorizationUrl);
@@ -158,6 +223,7 @@ try {
   let closed = false; const stopping = server.close().then(() => { closed = true; });
   await setImmediate(); assert.equal(closed, false);
   release(); await stopping;
+  if (fileCustody) console.log('Actual standalone CLI loaded private configuration and drained SIGTERM through disconnected-client OAuth publication');
   const connection = (await pool.query('SELECT client_secret_ref,access_token_ref,refresh_token_ref FROM canvas_connector.connections WHERE organization_id=$1 AND platform_id=$2', [org, 'runtime-platform'])).rows[0];
   assert.ok(connection); assert.equal(connection.client_secret_ref, reference);
   assert.equal(await vault.get(org, connection.access_token_ref, { ...scope, purpose: 'oauth_access_token' }), ACCESS);

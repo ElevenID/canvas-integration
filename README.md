@@ -116,3 +116,7 @@ The server-only `./rest-capture` worker reads scoped Canvas data into durable ca
 The [agent-file providers](docs/FILE_CREDENTIALS.md) acquire connector database
 passwords and OpenBao tokens from private rotating POSIX files without caches or
 ambient credential fallback. They do not provision agents or rotate TLS material.
+
+The [standalone OAuth entry point](docs/SERVICE_BOOTSTRAP.md) loads private,
+versioned configuration and TLS files, then drains on termination signals.
+Positive physical CLI and deployment qualification remain open.
