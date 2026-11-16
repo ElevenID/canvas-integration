@@ -86,6 +86,19 @@ test('operator shell is static, same-origin and cannot disclose authenticated st
   assert.equal(f.peer.seen.length,0);assert.equal(f.starts.length,0);assert.equal(f.callbacks.length,0);
 });
 
+test('operator session uses exact POST framing, shared budget and current Gateway authority only',async t=>{
+  const f=await fixture(t), path='/admin/session';
+  assert.equal((await f.send({path,method:'GET'})).status,405);
+  assert.equal((await f.send({path,body:'organization_id=forged'})).status,400);
+  assert.equal((await f.send({path,body:'',headers:{Origin:'https://other.example'}})).status,403);
+  assert.equal((await f.send({path,body:'',headers:{'Content-Type':'application/json'}})).status,415);
+  assert.equal(f.peer.seen.length,0);
+  const result=await f.send({path,body:''});assert.equal(result.status,200);
+  assert.deepEqual(JSON.parse(result.body),{organizationId:'750e8400-e29b-41d4-a716-446655440001'});
+  assert.equal(result.headers['cache-control'],'no-store');
+  assert.equal(f.peer.seen.length,2);assert.equal(f.starts.length,0);
+});
+
 test('LTI routes are opt-in and share the bounded HTTPS dispatcher without Gateway privilege impersonation',async t=>{
   const absent=await fixture(t);
   assert.equal((await absent.send({path:ltiLogin,method:'GET'})).status,404);

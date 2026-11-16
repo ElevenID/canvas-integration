@@ -72,6 +72,23 @@ export function createConnectorHttpsService(configuration = {}) {
     const hosts = request.rawHeaders.filter((_, i) => i % 2 === 1 && request.rawHeaders[i - 1].toLowerCase() === 'host');
     if (hosts.length !== 1 || hosts[0] !== origin.host) return finish(response, 421);
     if (typeof request.url !== 'string' || Buffer.byteLength(request.url) > 8192) return finish(response, 414);
+    if(request.url==='/admin/session') {
+      if(request.method!=='POST') return finish(response,405);
+      const count=name=>request.rawHeaders.filter((_,i)=>i%2===0 && request.rawHeaders[i].toLowerCase()===name).length;
+      if(count('origin')!==1 || request.headers.origin!==publicOrigin) return finish(response,403);
+      if(count('content-type')!==1 || !/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type']??'')) return finish(response,415);
+      let identity;
+      try {
+        if(await rateLimiter.consume(request.socket.remoteAddress)!==true) return finish(response,429);
+        for await(const chunk of request) if(chunk.length) return finish(response,400);
+        identity=await authenticateAndAuthorize(request,{platformId:'operator-console',action:'integration-connector:edit'});
+      }catch{return finish(response,503);}
+      if(!identity) return finish(response,401);
+      if(identity.authorized!==true || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(identity.organizationId??'')) return finish(response,403);
+      const body=JSON.stringify({organizationId:identity.organizationId});
+      response.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body),'Cache-Control':'no-store',
+        'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff',Connection:'close'});response.end(body);return;
+    }
     const assets = {
       '/admin': ['text/html; charset=utf-8', () => operatorPage([
         ...(platforms ? ['platforms'] : []), ...(clients ? ['clients'] : []), ...(connections ? ['connections'] : []),

@@ -55,6 +55,11 @@ export function createGatewayAdminAuthenticator({ gatewayOrigin, adminOrigin, se
     const originValues = incoming.rawHeaders.filter((_, index) => index % 2 === 1
       && incoming.rawHeaders[index - 1].toLowerCase() === 'origin');
     if (originValues.length !== 1 || originValues[0] !== adminOrigin) return null;
+    // Optional browser intent precondition, never a tenant authority source.
+    // It is compared with canonical session state and is never forwarded.
+    const intent = incoming.rawHeaders.filter((_, index) => index % 2 === 1
+      && incoming.rawHeaders[index - 1].toLowerCase() === 'x-connector-organization-intent');
+    if (intent.length > 1 || (intent.length === 1 && !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(intent[0]))) return null;
     const cookies = incoming.rawHeaders.flatMap((value, index) => index % 2 === 1
       && incoming.rawHeaders[index - 1].toLowerCase() === 'cookie' ? value.split(';') : []);
     if (cookies.join(';').length > 8192) return null;
@@ -71,6 +76,7 @@ export function createGatewayAdminAuthenticator({ gatewayOrigin, adminOrigin, se
       const user = session.user;
       if (!user || typeof user.user_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(user.user_id) || user.organization_context_unavailable === true
           || typeof user.organization_id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(user.organization_id)) return null;
+      if (intent.length === 1 && intent[0] !== user.organization_id) return null;
       const permissions = await read(`/v1/organizations/${user.organization_id}/members/me/permissions`, cookie, controller.signal);
       const authorized = permissions !== null && Array.isArray(permissions.permissions)
         && permissions.permissions.every(value => typeof value === 'string')

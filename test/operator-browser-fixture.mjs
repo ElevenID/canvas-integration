@@ -25,6 +25,7 @@ const session = '__Host-marty_session=synthetic_operator_session_000001';
 const secret = 'synthetic_operator_client_secret_000001';
 let permitted = true, sessionOrg = org, address, runtime, browser, loseReply = false, exchanges = 0;
 let mutationRequests = 0, gatewayReads = 0;
+let switchAfterPermission=false;
 const binding = { id:'operator-binding',source_id:'operator-source',active:true,revision:3,
   provider:'canvas',fact_type:'canvas.course_completion',resource_scope:{canvas_origin:canvasOrigin,course_id:'11',user_id:'22'},
   application_id:'private-operator-application',subject_id:'private-operator-subject',application_status:'pending',
@@ -37,8 +38,12 @@ front.setHandler((req,res) => { void (async () => {
   if (req.url.startsWith('/v1/')) {
     gatewayReads++;
     assert.equal(req.headers.cookie, session); assert.equal(req.headers['x-api-key'],undefined); assert.equal(req.headers['x-organization-id'],undefined);
+    assert.equal(req.headers['x-connector-organization-intent'],undefined);
     if (req.url === '/v1/auth/me') return json(res,{authenticated:true,user:{user_id:'operator-actor',organization_id:sessionOrg}});
-    if (req.url === `/v1/organizations/${sessionOrg}/members/me/permissions`) return json(res,{permissions:permitted?['integration-connector:edit']:[]});
+    if (req.url === `/v1/organizations/${sessionOrg}/members/me/permissions`) {
+      if(switchAfterPermission){switchAfterPermission=false;sessionOrg=otherOrg;}
+      return json(res,{permissions:permitted?['integration-connector:edit']:[]});
+    }
     if (req.url === `/v1/organizations/${org}/external-observation-bindings/operator-binding/inspect`) {
       assert.equal(req.headers.origin,front.origin);
       let body='';for await(const part of req)body+=part;assert.equal(body,'{}');
@@ -84,6 +89,12 @@ try {
   });
   address=await runtime.listen();
   browser=await chromium.launch({headless:true});
+  const noScriptContext=await browser.newContext({ignoreHTTPSErrors:true,javaScriptEnabled:false});
+  try {
+    const inert=await noScriptContext.newPage();await inert.goto(front.origin+'/admin');
+    assert.equal(await inert.locator('#client-provision [name=client_secret]').isDisabled(),true);
+    assert.equal(await inert.locator('#platform-create button').isDisabled(),true);
+  } finally {await noScriptContext.close();}
   const context=await browser.newContext({ignoreHTTPSErrors:true}); // Owned fixture certificates only.
   const page=await context.newPage(), pageErrors=[];
   page.on('pageerror',error=>pageErrors.push(error.name));
@@ -137,6 +148,14 @@ try {
   permitted=false;const beforeDenied=owner(`SELECT config_version FROM canvas_connector.platforms WHERE organization_id='${org}' AND id='operator-platform';`);
   await submit('platform-change',{mode:'disable'});assert.match(await page.locator('#notice').textContent(),/permission/);
   assert.equal(owner(`SELECT config_version FROM canvas_connector.platforms WHERE organization_id='${org}' AND id='operator-platform';`),beforeDenied);permitted=true;
+  owner(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,config_version,enabled) VALUES('${otherOrg}','operator-platform','${canvasOrigin}',3,true);`);
+  sessionOrg=otherOrg;
+  await submit('platform-change',{mode:'disable'});assert.match(await page.locator('#notice').textContent(),/organization/);
+  assert.equal(owner(`SELECT config_version FROM canvas_connector.platforms WHERE organization_id='${otherOrg}' AND id='operator-platform';`),'3');
+  sessionOrg=org;switchAfterPermission=true;
+  await submit('platform-change',{mode:'disable'});assert.match(await page.locator('#notice').textContent(),/organization/);
+  assert.equal(owner(`SELECT config_version FROM canvas_connector.platforms WHERE organization_id='${org}' AND id='operator-platform';`),'3');
+  sessionOrg=org;await click('#reload-context');await page.locator('#platform-id').fill('operator-platform');await click('#inspect-platform');
   // Real commit, lost HTTP reply. One immutable operation survives reload and
   // tenant switches; reconciliation never calls the write endpoint again.
   loseReply=true;await submit('platform-change',{mode:'disable'});
@@ -144,12 +163,13 @@ try {
   assert.equal(pending.length,1);const originalId=pending[0].operationId,beforeReconcile=mutationRequests;
   await page.reload();await page.locator('#platform-id').fill('operator-platform');
   await submit('platform-change',{mode:'disable'});assert.equal(mutationRequests,beforeReconcile);
-  sessionOrg=otherOrg;await click('#operations button');assert.match(await page.locator('#notice').textContent(),/No receipt/);
+  sessionOrg=otherOrg;await click('#operations button');assert.match(await page.locator('#notice').textContent(),/organization/);
+  await click('#reload-context');await click('#operations button');assert.match(await page.locator('#notice').textContent(),/original ElevenID organization/);
   assert.equal(await page.locator('#operations li').count(),1);sessionOrg=org;
-  await click('#operations button');assert.equal((await output()).receipt.operationId,originalId);assert.equal(await page.locator('#operations li').count(),0);
+  await click('#reload-context');await click('#operations button');assert.equal((await output()).receipt.operationId,originalId);assert.equal(await page.locator('#operations li').count(),0);
   assert.equal(mutationRequests,beforeReconcile);
   assert.equal(owner(`SELECT count(*) FROM canvas_connector.platform_operation_audit WHERE organization_id='${org}' AND operation_id='${originalId}';`),'1');
-  await click('#inspect-platform');assert.equal((await output()).platform.enabled,false);
+  await page.locator('#platform-id').fill('operator-platform');await click('#inspect-platform');assert.equal((await output()).platform.enabled,false);
   // Tampered local pointers never supply an endpoint, session or tenant authority.
   await page.evaluate(()=>sessionStorage.setItem('elevenid_canvas_operator_pending_v1','[{"path":"https://evil.example/steal"}]'));
   await page.reload();assert.match(await page.locator('#notice').textContent(),/storage/);
@@ -161,7 +181,12 @@ try {
   assert.equal((await output()).receipt.status,'disconnected');assert.equal(await page.locator('#operations li').count(),0);
   assert.equal(exchanges,1);assert.deepEqual(pageErrors,[]);assert.ok(await idle());
   const screenshot=process.env.CANVAS_OPERATOR_TEST_SCREENSHOT;
-  if(screenshot) {assert.ok(isAbsolute(screenshot));await page.screenshot({path:screenshot,fullPage:true});}
+  if(screenshot) {
+    assert.ok(isAbsolute(screenshot));await page.screenshot({path:screenshot,fullPage:true});
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+    await page.screenshot({path:screenshot.replace(/\.png$/,'-mobile.png'),fullPage:true});
+  }
   await context.close();
   console.log('Actual Chromium operator -> same-origin HttpOnly Gateway session -> production restricted-role PG/OpenBao/platform/client/OAuth/capture/LTI/disconnect passed; lost commit reply/tenant switch/permission revocation/reload/pointer tamper preserve original operation, no automatic write retry. Synthetic public Gateway authority only.');
 } finally {

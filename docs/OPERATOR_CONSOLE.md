@@ -15,6 +15,20 @@ rate, current Gateway session/permission, tenant, version and receipt checks.
 There is no browser-supplied organization, local membership cache or producer key.
 No new database grants, migrations or provider transport are required.
 
+`POST /admin/session` accepts only an empty same-origin form and the existing
+Gateway session, under the shared request budget and current permission checks.
+It returns only the canonical active organization ID. The console displays and
+fixes that organization as its intent context. Subsequent API requests carry
+`X-Connector-Organization-Intent` only as a precondition: the authenticator compares
+one canonical UUID with current Gateway session state before permission lookup
+on each authorization/reauthorization, and never forwards or uses it to select a
+tenant. Existing clients without this optional guard still derive authority
+exclusively from Gateway. A mismatch stops the action; there is no silent context
+adoption or write retry. Explicit context reload clears platform selection,
+versions, cursors and secret fields while preserving original pending pointers.
+This detects switches observed by those checks, not an atomic transaction spanning
+Gateway authentication and connector PostgreSQL.
+
 ## Public origin and login
 
 Serve the console where the existing Gateway session cookie is available. For a
@@ -64,7 +78,7 @@ and canonical even when a previously loaded console or form is stale.
 ## Unconfirmed operations
 
 Before a durable mutation, the browser preserves a bounded receipt pointer in
-this tab's session storage: form/platform IDs, fixed API and receipt paths, the
+this tab's session storage: original organization/form/platform IDs, fixed API and receipt paths, the
 original operation UUID, and an authorization ID when recovery needs it. It
 contains no intent body, client secret, token, session, application authority or
 permission. The browser must be able to persist/read this pointer before sending

@@ -14,8 +14,8 @@ export function operatorPage(features) {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Canvas connections · ElevenID</title><link rel="stylesheet" href="/admin/styles.css"><script src="/admin/app.js" defer></script>
 <header><a href="/">ElevenID</a><p>Integrations</p><h1>Canvas connections</h1><p>Manage Canvas access and capture settings. Your current ElevenID organization and permissions govern every action.</p></header>
-<main data-features="${features.join(',')}"><p id="notice" role="status" aria-live="polite">Load your platforms to begin. Sign in to ElevenID on this origin first.</p>
-<fieldset id="workspace" disabled><legend class="sr-only">Connection controls</legend>
+<main data-features="${features.join(',')}"><p id="notice" role="status" aria-live="polite">Loading your current organization. Sign in to ElevenID on this origin first.</p><p id="organization">Organization context not loaded.</p>
+<fieldset id="workspace" disabled><legend class="sr-only">Connection controls</legend><button id="reload-context" type="button">Reload organization context</button>
 <section data-requires="platforms"><h2>Platforms</h2><div class="toolbar"><button id="catalog" type="button">Load platforms</button><button id="catalog-next" type="button" hidden>Next page</button></div><ul id="platform-list"></ul>
 <label>Selected platform<input id="platform-id" maxlength="128" autocomplete="off"></label><label>Platform version<input id="platform-version" type="number" min="1" max="9007199254740991" step="1"></label>
 <button id="inspect-platform" type="button">Inspect platform</button><p id="platform-status">No platform selected.</p>
@@ -61,16 +61,17 @@ function operatorBrowser() {
   const label = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
   const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
   const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-  const pathAllowed = path => path === '/platforms/catalog' || /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:configuration\/(?:inspect|receipt|create|change)|connection\/(?:inspect|receipt|disconnect)|oauth\/client\/(?:inspect|receipt|provision)|oauth\/start|oauth\/attempts\/(?:inspect|receipt|recover)|capture-routes\/(?:catalog|[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:inspect|receipt|capture|create|replace|activate|deactivate|schedule))|lti\/registrations\/(?:catalog|[a-f0-9-]{36}\/(?:inspect|receipt|create|replace|activate|deactivate)))$/.test(path);
+  const pathAllowed = path => ['/admin/session','/platforms/catalog'].includes(path) || /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:configuration\/(?:inspect|receipt|create|change)|connection\/(?:inspect|receipt|disconnect)|oauth\/client\/(?:inspect|receipt|provision)|oauth\/start|oauth\/attempts\/(?:inspect|receipt|recover)|capture-routes\/(?:catalog|[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:inspect|receipt|capture|create|replace|activate|deactivate|schedule))|lti\/registrations\/(?:catalog|[a-f0-9-]{36}\/(?:inspect|receipt|create|replace|activate|deactivate)))$/.test(path);
   const features = new Set(document.querySelector('main').dataset.features.split(','));
   for (const section of document.querySelectorAll('[data-requires]')) section.hidden = !features.has(section.dataset.requires);
   let busy = false, platformCursor = null, routeCursor = null, ltiCursor = null, cursorPlatform = null;
+  let organizationId = null;
   let journal = [], storageReady = true;
   const storageKey = 'elevenid_canvas_operator_pending_v1';
   const formIds = ['platform-create','platform-change','client-provision','connection-disconnect','route-edit','route-action','lti-edit','lti-action','recovery'];
   function validEntry(entry) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry) || Object.keys(entry).sort().join(',') !== 'extras,formId,operationId,path,platformId,receiptPath') return false;
-    return formIds.includes(entry.formId) && label(entry.platformId) && uuid(entry.operationId) && pathAllowed(entry.path)
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) || Object.keys(entry).sort().join(',') !== 'extras,formId,operationId,organizationId,path,platformId,receiptPath') return false;
+    return formIds.includes(entry.formId) && uuid(entry.organizationId) && label(entry.platformId) && uuid(entry.operationId) && pathAllowed(entry.path)
       && entry.path.startsWith('/platforms/' + entry.platformId + '/') && /\/(?:create|change|provision|disconnect|replace|activate|deactivate|schedule|recover)$/.test(entry.path)
       && entry.receiptPath === entry.path.replace(/[^/]+$/, 'receipt') && pathAllowed(entry.receiptPath)
       && entry.extras && typeof entry.extras === 'object' && !Array.isArray(entry.extras)
@@ -113,11 +114,13 @@ function operatorBrowser() {
   function registration(value) { if (!uuid(value)) throw Error('invalid_input'); return '/lti/registrations/' + value; }
   async function post(path, values = {}) {
     if (!pathAllowed(path)) throw Error('invalid_input');
+    if(path!=='/admin/session' && organizationId===null) throw Error('context_required');
     const body = new URLSearchParams(values), controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45000);
     try {
       const response = await window.fetch(path, { method: 'POST', credentials: 'same-origin', redirect: 'error', cache: 'no-store', signal: controller.signal,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', Accept: 'application/json' }, body });
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', Accept: 'application/json',
+          ...(path==='/admin/session'?{}:{'X-Connector-Organization-Intent':organizationId}) }, body });
       if (response.status !== 200) { const error = Error('request_unconfirmed'); error.status = response.status; throw error; }
       if (response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') throw Error('request_unconfirmed');
       const reader = response.body.getReader(), chunks = []; let size = 0;
@@ -135,7 +138,8 @@ function operatorBrowser() {
     catch (error) {
       if (error.message === 'invalid_input') notice('Check the selected platform, IDs and versions.');
       else if (error.message === 'journal_unavailable') notice('Operation IDs could not be safely retained. Inspect any displayed receipt before further changes.');
-      else if (error.status === 401) notice('Sign in to ElevenID on this origin, then inspect again.');
+      else if (error.message === 'context_required') notice('Sign in and reload the current organization context before continuing.');
+      else if (error.status === 401) notice('Sign in or explicitly reload organization context before continuing. The active organization may have changed.');
       else if (error.status === 403) notice('Your current organization or permission does not allow this action.');
       else if (error.status === 409) notice('The change conflicts with current configuration, scope or version. Inspect current state before submitting a new operation.');
       else if (error.status === 400) notice('The server rejected the supplied fields. Check the IDs, versions and required values.');
@@ -147,9 +151,10 @@ function operatorBrowser() {
     const list = get('operations'); list.replaceChildren();
     for (const entry of journal) {
       const item = document.createElement('li'), text = document.createElement('p'), button = document.createElement('button');
-      text.textContent = entry.platformId + ' · ' + entry.formId + ' · ' + entry.operationId;
+      text.textContent = entry.organizationId + ' · ' + entry.platformId + ' · ' + entry.formId + ' · ' + entry.operationId;
       button.type = 'button'; button.textContent = 'Inspect original receipt';
       button.addEventListener('click', () => run(async () => {
+        if(organizationId!==entry.organizationId) {notice('Switch to the original ElevenID organization '+entry.organizationId+' and reload context to inspect this receipt.');return;}
         const result = await post(entry.receiptPath, { ...entry.extras, operation_id: entry.operationId }); show(result);
         if (matchesReceipt(entry, result.receipt)) {
           save(journal.filter(current => current !== entry)); notice('Original receipt found. Inspect current state before another change.');
@@ -161,9 +166,10 @@ function operatorBrowser() {
   }
   renderJournal();
   async function mutate(form, path, values) {
+    if(organizationId===null) throw Error('context_required');
     if (journal.some(entry => entry.formId === form.id)) { notice('This form has an unconfirmed operation. Inspect its original receipt first.'); return; }
     const operationId = window.crypto.randomUUID(), platformId = path.split('/')[2];
-    const entry = { formId: form.id, platformId, path, receiptPath: path.replace(/[^/]+$/, 'receipt'), operationId,
+    const entry = { formId: form.id, organizationId, platformId, path, receiptPath: path.replace(/[^/]+$/, 'receipt'), operationId,
       extras: values.authorization_id ? { authorization_id: values.authorization_id } : {} };
     save([...journal, entry]);
     show({operationId,platformId,status:'pending'});
@@ -250,6 +256,20 @@ function operatorBrowser() {
     if (form.id === 'receipt') { use('resource_id', ['route','lti'].includes(value('kind'))); use('authorization_id', value('kind') === 'recovery'); }
   }
   for (const form of document.forms) { updateForm(form); form.addEventListener('change', () => updateForm(form)); }
+  async function loadContext() {
+    organizationId=null;get('organization').textContent='Organization context not loaded.';
+    for(const form of document.forms) {form.reset();updateForm(form);}
+    get('platform-id').value='';get('platform-version').value='';get('platform-status').textContent='Select and inspect a platform in this organization.';
+    get('platform-list').replaceChildren();get('result').textContent='No inspection yet.';
+    platformCursor=routeCursor=ltiCursor=cursorPlatform=null;
+    for(const id of ['catalog-next','routes-next','lti-next']) get(id).hidden=true;
+    const current=await post('/admin/session');
+    if(!current || Object.keys(current).join(',')!=='organizationId' || !uuid(current.organizationId)) throw Error('request_unconfirmed');
+    organizationId=current.organizationId;
+    get('organization').textContent='ElevenID organization: '+organizationId;
+    notice(storageReady?'Organization context loaded. Load platforms to continue. Pending receipts remain in their original organization.':'Pending-operation storage is unavailable or invalid. Inspections remain available; changes are disabled.');
+  }
+  get('reload-context').addEventListener('click',()=>run(loadContext));
   for (const form of document.forms) form.addEventListener('submit', event => {
     event.preventDefault();
     // Snapshot before the workspace fieldset is disabled for the request.
@@ -329,6 +349,6 @@ function operatorBrowser() {
     });
   });
   workspace.dataset.ready = 'true';
-  workspace.disabled = false;
+  void run(loadContext);
 }
 export const operatorScript = '(' + operatorBrowser.toString() + ')();';

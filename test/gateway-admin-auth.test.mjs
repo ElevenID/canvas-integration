@@ -43,6 +43,22 @@ test('authenticator rejects missing, duplicated and forged context before transp
     assert.equal(fixture.seen.length, 0);
   } finally { await fixture.close(); }
 });
+
+test('organization intent is only a canonical session precondition and is never forwarded',async()=>{
+  const fixture=await httpsFixture();
+  try {
+    fixture.setHandler((req,res)=>json(res,req.url==='/v1/auth/me'?session:{permissions:['integration-connector:edit']}));
+    const authenticate=createGatewayAdminAuthenticator({gatewayOrigin:fixture.origin,adminOrigin:admin,sessionCookieName:'session',ca:fixture.ca});
+    const withIntent=(...values)=>{const request=incoming();for(const value of values)request.rawHeaders.push('X-Connector-Organization-Intent',value);return request;};
+    for(const values of [[org,org],['caller-tenant'],['20000000-0000-4000-8000-000000000001,other']]) assert.equal(await authenticate(withIntent(...values),operation),null);
+    assert.equal(fixture.seen.length,0);
+    assert.equal(await authenticate(withIntent('20000000-0000-4000-8000-000000000002'),operation),null);
+    assert.equal(fixture.seen.length,1,'mismatch stops before permission lookup');
+    assert.equal((await authenticate(withIntent(org),operation)).organizationId,org);
+    assert.equal((await authenticate(incoming(),operation)).organizationId,org,'legacy caller still derives tenant from Gateway');
+    for(const request of fixture.seen) assert.equal(request.headers['x-connector-organization-intent'],undefined);
+  }finally{await fixture.close();}
+});
 for (const permission of ['*', 'integrations:write', 'admin:full']) test(`no invented scope grant: ${permission}`, async () => {
   const fixture = await httpsFixture();
   try {
