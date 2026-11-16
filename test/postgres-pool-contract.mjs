@@ -5,6 +5,8 @@ import { createConnectorPostgresPool } from '../src/postgres-pool.mjs';
 import { createPostgresRepository } from '../src/postgres-repository.mjs';
 import { createOpenBaoKeyProvider } from '../src/openbao-key-provider.mjs';
 import { createEncryptedVault } from '../src/encrypted-vault.mjs';
+import { execFileSync } from 'node:child_process';
+import { initialOAuthCustodyContract } from './initial-oauth-custody-contract.mjs';
 
 const file=process.argv[2];const stage=process.argv[3];
 assert.match(file??'',/canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);
@@ -21,6 +23,11 @@ const denied=operation=>assert.rejects(operation,error=>{
 const scoped={platformId:'driver-platform',provider:'canvas',purpose:'oauth_access_token'};
 try {
  if(stage==='initial') {
+  const container=process.argv[4];
+  assert.match(container??'',/^canvas-pg-driver-[a-f0-9]{32}$/);
+  await initialOAuthCustodyContract(pool,{keyProvider,ownerQuery:async sql=>{
+    execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
+  }});
   const [identity]=(await pool.query(`SELECT current_user AS identity,pg_has_role(current_user,'postgres','MEMBER') AS privileged,
     (SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()) AS encrypted`)).rows;
   assert.deepEqual(identity,{identity:'canvas_runtime',privileged:false,encrypted:true});

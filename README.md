@@ -119,4 +119,9 @@ ambient credential fallback. They do not provision agents or rotate TLS material
 
 The [standalone OAuth entry point](docs/SERVICE_BOOTSTRAP.md) loads private,
 versioned configuration and TLS files, then drains on termination signals.
-Positive physical CLI and deployment qualification remain open.
+Positive Linux CLI and signal-drain contracts passed; deployment qualification
+remains open.
+
+The [initial OAuth custody adapters](docs/INITIAL_OAUTH_CUSTODY.md) persist
+exchange attempts and atomically stage encrypted token references. Migrating the
+actual callback and providing audited operator recovery remain required.

@@ -14,6 +14,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { createOAuthAdminHandler } from '../src/oauth-admin-http.mjs';
 import { createOAuthCallbackHandler } from '../src/oauth-callback-http.mjs';
 import { createGatewayAdminAuthenticator } from '../src/gateway-admin-auth.mjs';
+import { initialOAuthCustodyContract } from './initial-oauth-custody-contract.mjs';
 
 const container = process.argv[2];
 assert.match(container ?? '', /^canvas-storage-test-[a-f0-9]{32}$/);
@@ -53,6 +54,7 @@ const pool = { async query(sql, values) {
   }))) };
 } };
 const repository = createPostgresRepository(pool);
+await initialOAuthCustodyContract(pool);
 await pool.query("INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled) VALUES ('adapter-org','adapter-platform','https://canvas.example.test',true)", []);
 assert.equal((await repository.getPlatform('adapter-org', 'adapter-platform')).configVersion, 1);
 assert.equal(await repository.getPlatform('foreign', 'adapter-platform'), null);
