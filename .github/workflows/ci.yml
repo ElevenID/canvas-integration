@@ -10,6 +10,20 @@ concurrency:
   group: canvas-boundary-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  lti-state:
+    name: Connector LTI state and browser-proof protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Test real PostgreSQL and pinned HTTPS LTI staging and acceptance
+        run: python3 scripts/test_lti_state.py
   storage:
     name: Connector PostgreSQL storage contract
     runs-on: ubuntu-latest
