@@ -94,7 +94,11 @@ try {
   // Real concurrent callers, including a separate role/pool, share one budget.
   owner("UPDATE canvas_connector.oauth_http_limit SET request_limit=3,window_ms=60000,hits=0,window_started_at=clock_timestamp();");
   const limiter = createOAuthHttpRateLimiter(pool);
-  const admitted = await Promise.all(Array.from({ length: 8 }, () => limiter.consume('ignored-client-address')));
+  // Keep cold connection acquisitions within the file provider's four-read bound.
+  const admitted = [];
+  for (let batch = 0; batch < 2; batch++) {
+    admitted.push(...await Promise.all(Array.from({ length: 4 }, () => limiter.consume('ignored-client-address'))));
+  }
   assert.equal(admitted.filter(Boolean).length, 3);
   assert.equal((await pool.query('SELECT hits FROM canvas_connector.oauth_http_limit')).rows[0].hits, 3);
   owner("CREATE ROLE canvas_counter LOGIN PASSWORD 'synthetic-counter-password'; GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_counter; GRANT USAGE ON SCHEMA canvas_connector TO canvas_counter; GRANT SELECT ON canvas_connector.oauth_http_limit TO canvas_counter; GRANT UPDATE(hits,window_started_at) ON canvas_connector.oauth_http_limit TO canvas_counter; GRANT EXECUTE ON FUNCTION canvas_connector.consume_oauth_http_limit() TO canvas_counter;");
