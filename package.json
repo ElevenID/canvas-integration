@@ -74,6 +74,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/gateway-admin-auth.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./openbao-key-provider": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/openbao-key-provider.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {

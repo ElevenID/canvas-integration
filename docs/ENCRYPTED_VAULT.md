@@ -11,8 +11,8 @@ Provide a dedicated connector database pool and an explicit key provider:
 `current()` returns `{ id, key }`; `byId(id)` returns that version's 32-byte
 Buffer. The provider must use connector-owned external custody such as a
 dedicated OpenBao key path. It must enforce caller authorization, rotation and
-revocation. No key-provider transport, policy or credential is configured by
-this module. Neither encryption keys nor plaintext secrets enter PostgreSQL.
+revocation. The separate OPENBAO_KEY_PROVIDER.md describes a concrete read-only external
+provider; no transport, policy or credential is implicitly configured by this vault. Neither encryption keys nor plaintext secrets enter PostgreSQL.
 There is no default key, environment lookup, in-memory production fallback or
 access to the Marty integration vault or Gateway credentials.
 

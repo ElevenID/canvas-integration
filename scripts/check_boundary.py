@@ -12,18 +12,19 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.mjs'},
  'src/browser-denied.mjs': set(),
- 'src/canvas-oauth-provider.mjs': {'node:https', './canvas-rest-network.mjs'},
+ 'src/canvas-oauth-provider.mjs': {'./canvas-rest-network.mjs', 'node:https'},
  'src/canvas-oauth.mjs': {'./canvas-rest-network.mjs', 'node:crypto', './oauth-browser-binding.mjs'},
  'src/canvas-rest-contract.mjs': set(),
  'src/canvas-rest-network.mjs': {'node:net', './canvas-rest-contract.mjs', 'node:dns/promises'},
- 'src/canvas-rest-reader.mjs': {'node:https', './canvas-rest-network.mjs', './canvas-rest-contract.mjs'},
- 'src/configuration.mjs': {'./gateway-client.mjs', 'node:fs/promises'},
+ 'src/canvas-rest-reader.mjs': {'./canvas-rest-network.mjs', './canvas-rest-contract.mjs', 'node:https'},
+ 'src/configuration.mjs': {'node:fs/promises', './gateway-client.mjs'},
  'src/encrypted-vault.mjs': {'node:crypto'},
  'src/gateway-admin-auth.mjs': {'node:https'},
  'src/gateway-client.mjs': {'./operations.mjs', 'node:https'},
  'src/oauth-admin-http.mjs': {'./oauth-browser-binding.mjs'},
  'src/oauth-browser-binding.mjs': {'node:crypto'},
  'src/oauth-callback-http.mjs': {'./oauth-browser-binding.mjs'},
+ 'src/openbao-key-provider.mjs': {'node:https'},
  'src/operations.mjs': set(),
  'src/postgres-repository.mjs': set(),
  'src/refresh-worker.mjs': set(),
@@ -72,6 +73,7 @@ def audit(root: Path) -> list[str]:
      './oauth-admin-http': './src/oauth-admin-http.mjs',
      './oauth-browser-binding': './src/oauth-browser-binding.mjs',
      './oauth-callback-http': './src/oauth-callback-http.mjs',
+     './openbao-key-provider': './src/openbao-key-provider.mjs',
      './postgres-repository': './src/postgres-repository.mjs',
      './refresh-worker': './src/refresh-worker.mjs',
      './revocation-worker': './src/revocation-worker.mjs'}
@@ -106,6 +108,11 @@ def audit(root: Path) -> list[str]:
                       "publishConnection", "completionLocation"):
         if invariant not in lifecycle:
             errors.append("Canvas OAuth lifecycle invariant missing")
+    key_provider = (root / "src/openbao-key-provider.mjs").read_text()
+    for invariant in ("rejectUnauthorized:true", "agent:false", "method:'GET'", "'X-Vault-Token':token",
+                      "?version=1", "metadata.destroyed!==false", "controller.abort()", "keyPath}/current"):
+        if invariant not in key_provider:
+            errors.append("OpenBao key-provider transport/custody invariant missing")
     for workflow in (root / ".github/workflows").glob("*.yml"):
         text = workflow.read_text()
         for action in re.findall(r"uses:\s*([^\s]+)", text):
