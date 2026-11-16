@@ -66,6 +66,9 @@ function readKeys(url, pinned, ca, signal) {
       }, response => {
         response.on('error', () => finish(true)); response.on('aborted', () => finish(true));
         if (response.statusCode !== 200) return finish(true); // No redirects or automatic retries.
+        const countHeader = name => response.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === name).length;
+        if (countHeader('content-type') !== 1 || countHeader('content-encoding') > 1 ||
+            countHeader('content-length') > 1 || countHeader('link') !== 0) return finish(true);
         const parts = String(response.headers['content-type'] ?? '').toLowerCase().split(';').map(part => part.trim());
         if (!['application/json', 'application/jwk-set+json'].includes(parts[0]) ||
             parts.slice(1).some(part => !/^charset=(?:"?utf-8"?)$/.test(part)) ||
@@ -135,7 +138,11 @@ export function createCanvasLtiPlatformReader(configuration) {
         const result = validateCanvasResourceLinkLaunch({ token, jwksText: keys, expected: { ...registration, nonce },
           nowSeconds: Math.floor(Date.now() / 1000) });
         if (controller.signal.aborted || performance.now() >= deadline) throw new Error('canvas_lti_platform_unavailable');
-        if (Math.floor(Date.now() / 1000) >= result.expiresAt) throw new Error('invalid_lti_launch');
+        const finalNow = Math.floor(Date.now() / 1000);
+        if (finalNow >= result.expiresAt || finalNow - result.issuedAt > 300 ||
+            result.issuedAt > finalNow + 30 || (result.notBefore !== null && result.notBefore > finalNow)) {
+          throw new Error('invalid_lti_launch');
+        }
         return result;
       } finally { clearTimeout(timer); }
     },

@@ -34,7 +34,7 @@ test('valid resource launch returns only frozen protocol identifiers; ignores fu
   const result = validateCanvasResourceLinkLaunch(input());
   assert.deepEqual(result, { issuer: expected.issuer, clientId: expected.clientId,
     deploymentId: expected.deploymentId, subject: 'canvas-subject', nonce: expected.nonce,
-    issuedAt: now - 10, expiresAt: now + 3600, targetLinkUri: expected.targetLinkUri,
+    issuedAt: now - 10, expiresAt: now + 3600, notBefore: null, targetLinkUri: expected.targetLinkUri,
     resourceLinkId: 'resource-1', contextId: 'course-1', messageType: 'LtiResourceLinkRequest', version: '1.3.0' });
   assert.ok(Object.isFrozen(result));
   for (const sensitive of ['private@example.invalid', 'Private Learner', 'Learner', 'VERIFIED']) {

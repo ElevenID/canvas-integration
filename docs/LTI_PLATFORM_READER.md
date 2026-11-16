@@ -27,7 +27,10 @@ followed. There are no retries or cached keys. Canvas tokens, Marty API keys, se
 cookies and the launch token are never sent to the JWKS endpoint.
 
 The entire call has one absolute deadline across DNS, TLS, bounded streaming and
-validation, with an elapsed-time check after cryptographic work. Redirects, encoded
+validation, with an elapsed-time check after cryptographic work and one final
+wall-clock sample rechecking expiry, launch age, future issued-at and not-before.
+Duplicate Content-Type/Encoding/Length headers are rejected using the original raw
+headers. Redirects, encoded
 bodies, pagination, invalid UTF-8 and responses above128KiB fail closed. Strict JSON
 and public-key validation are delegated to the resource-link verifier. Transport
 failure reports `canvas_lti_platform_unavailable`; invalid launches/keys report

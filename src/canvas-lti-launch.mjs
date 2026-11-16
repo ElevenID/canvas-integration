@@ -115,10 +115,11 @@ export function validateCanvasResourceLinkLaunch({ token, jwksText, expected, no
         audiences.some(audience => !trustedAudiences.has(text(audience)))) invalid();
     if ((audiences.length > 1 || own(claims, 'azp')) && claims.azp !== clientId) invalid();
     const issuedAt = integer(claims.iat), expiresAt = integer(claims.exp);
+    const notBefore = own(claims, 'nbf') ? integer(claims.nbf) : null;
     // Connector policy: five minute launch age, 30 second future-iat tolerance.
     // Expiry is strict; a platform's longer exp does not extend launch age.
     if (now >= expiresAt || issuedAt >= expiresAt || issuedAt > now + 30 || now - issuedAt > 300 ||
-        (own(claims, 'nbf') && integer(claims.nbf) > now)) invalid();
+        (notBefore !== null && notBefore > now)) invalid();
     if (claims[CLAIM + 'version'] !== '1.3.0' ||
         claims[CLAIM + 'message_type'] !== 'LtiResourceLinkRequest' ||
         claims[CLAIM + 'deployment_id'] !== deploymentId ||
@@ -135,7 +136,7 @@ export function validateCanvasResourceLinkLaunch({ token, jwksText, expected, no
     }
     if (roles.length && !roles.some(role => knownRoles.has(role))) invalid();
     const contextId = own(claims, CLAIM + 'context') ? text(object(claims[CLAIM + 'context']).id) : null;
-    return Object.freeze({ issuer, clientId, deploymentId, subject, nonce, issuedAt, expiresAt,
+    return Object.freeze({ issuer, clientId, deploymentId, subject, nonce, issuedAt, expiresAt, notBefore,
       targetLinkUri, resourceLinkId, contextId, messageType: 'LtiResourceLinkRequest', version: '1.3.0' });
   } catch {
     // Never reflect bearer claims, trusted configuration, keys or crypto errors.

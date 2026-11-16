@@ -111,6 +111,7 @@ for (const [name, handler] of Object.entries({
   advertisedOversize: (_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '131073' }); res.end(); },
   streamedOversize: (_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('x'.repeat(131073)); },
   utf8: (_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(Buffer.from([0xff])); },
+  duplicateType: (_req, res) => { res.writeHead(200, ['Content-Type', 'application/json', 'Content-Type', 'text/html']); res.end(JSON.stringify({ keys: [key] })); },
 })) test(`JWKS ${name} is unavailable with one fixed request and no redirects/retries`, async () => {
   const fixture = await httpsFixture();
   try {
@@ -163,4 +164,24 @@ test('configuration rejects transports, credentials, unsafe trust and invalid li
       assert.throws(() => createCanvasLtiPlatformReader(options(fixture, overrides)), { message: 'invalid_lti_configuration' });
     }
   } finally { await fixture.close(); }
+});
+test('one final wall-clock sample rechecks launch age, future issued-at and not-before after validation', async () => {
+  const fixture = await httpsFixture();
+  const originalNow = Date.now;
+  try {
+    const base = Math.floor(originalNow() / 1000);
+    fixture.setHandler((_req, res) => json(res, { keys: [key] }));
+    const reader = createCanvasLtiPlatformReader(options(fixture));
+    for (const [claims, finalSeconds] of [
+      [{ iat: base - 300, exp: base + 3600 }, base + 1],
+      [{ iat: base + 30, exp: base + 3600 }, base - 1],
+      [{ nbf: base, exp: base + 3600 }, base - 1],
+    ]) {
+      Date.now = originalNow;
+      const signed = token(fixture.origin, claims); let calls = 0;
+      Date.now = () => (calls++ === 0 ? base : finalSeconds) * 1000;
+      await assert.rejects(reader.validateResourceLink({ token: signed, nonce }), { message: 'invalid_lti_launch' });
+      assert.equal(calls, 2, 'initial and final checks each capture one wall-clock sample');
+    }
+  } finally { Date.now = originalNow; await fixture.close(); }
 });
