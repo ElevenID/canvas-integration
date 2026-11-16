@@ -124,6 +124,16 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/oauth-service-config.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./connector-worker-runtime": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/connector-worker-runtime.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./worker-service-config": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/worker-service-config.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
@@ -131,7 +141,8 @@
     "check:boundary": "python3 scripts/check_boundary.py",
     "check": "npm run check:boundary && npm test",
     "probe": "node bin/probe.mjs",
-    "start:oauth": "node bin/serve-oauth.mjs"
+    "start:oauth": "node bin/serve-oauth.mjs",
+    "start:workers": "node bin/serve-workers.mjs"
   },
   "files": [
     "src",

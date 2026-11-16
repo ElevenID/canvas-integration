@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { resolve, isAbsolute } from 'node:path';
+import { parsePrivateJson } from './private-json.mjs';
 import { createPrivateTextFile } from './private-file.mjs';
 import { createConnectorDatabasePasswordFile, createConnectorOpenBaoTokenFile } from './file-credentials.mjs';
 
@@ -8,34 +9,6 @@ function fields(value, allowed) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)
       || Object.keys(value).some(key => !allowed.includes(key))) throw unavailable();
 }
-// JSON.parse validates grammar; this bounded scan additionally rejects duplicate
-// decoded keys (including escaped aliases), malformed strings and deep nesting.
-function parse(text) {
-  const stack = [];
-  for (let i = 0; i < text.length;) {
-    const char = text[i];
-    if (char === '"') {
-      const start = i++;
-      while (i < text.length) { if (text[i] === '\\') i += 2; else if (text[i++] === '"') break; }
-      const string = JSON.parse(text.slice(start, i));
-      if (!string.isWellFormed()) throw unavailable();
-      const parent = stack.at(-1);
-      if (parent?.object && parent.key) {
-        if (parent.keys.has(string)) throw unavailable();
-        parent.keys.add(string); parent.key = false;
-      }
-      continue;
-    }
-    if (char === '{' || char === '[') {
-      if (stack.length >= 16) throw unavailable();
-      stack.push({ object: char === '{', key: true, keys: new Set() });
-    } else if (char === '}' || char === ']') stack.pop();
-    else if (char === ',' && stack.at(-1)?.object) stack.at(-1).key = true;
-    i++;
-  }
-  return JSON.parse(text);
-}
-
 /** Read private static routing/TLS configuration once. Password/token values
  * remain in separate renewing files, read only by their purpose-specific APIs.
  * This function does no network I/O, provisioning or environment lookup.
@@ -45,7 +18,7 @@ export async function loadConnectorOAuthConfiguration(options = {}) {
     fields(options, ['path', 'signal', 'timeoutMs']);
     const { path, signal, timeoutMs = 1000 } = options;
     const read = filename => createPrivateTextFile({ path: filename, timeoutMs, maxBytes: 65536 }).readText({ signal });
-    const configuration = parse(await read(path));
+    const configuration = parsePrivateJson(await read(path));
     fields(configuration, ['schemaVersion', 'database', 'keyCustody', 'canvas', 'gatewayAuthentication', 'http']);
     if (configuration.schemaVersion !== 1) throw unavailable();
     const { database, keyCustody, http, gatewayAuthentication } = configuration;

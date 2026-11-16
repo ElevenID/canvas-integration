@@ -16,11 +16,13 @@ function provider(configuration, purpose) {
       if (value.endsWith('\r\n')) value = value.slice(0, -2);
       else if (value.endsWith('\n')) value = value.slice(0, -1);
       if (!value || Buffer.byteLength(value) > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(value)
-          || (purpose === 'openbao' && !/^[A-Za-z0-9._~-]{16,4096}$/.test(value))) throw unavailable();
+          || (purpose === 'openbao' && !/^[A-Za-z0-9._~-]{16,4096}$/.test(value))
+          || (purpose === 'gateway' && !/^[A-Za-z0-9._~-]{32,512}$/.test(value))) throw unavailable();
       return value;
     } catch { throw unavailable(); }
   }
-  return Object.freeze(purpose === 'database' ? { getPassword: acquire } : { getToken: acquire });
+  return Object.freeze(purpose === 'database' ? { getPassword: acquire } : purpose==='gateway'?{getApiKey:acquire}:{ getToken: acquire });
 }
 export function createConnectorDatabasePasswordFile(configuration) { return provider(configuration, 'database'); }
 export function createConnectorOpenBaoTokenFile(configuration) { return provider(configuration, 'openbao'); }
+export function createConnectorGatewayApiKeyFile(configuration) { return provider(configuration, 'gateway'); }
