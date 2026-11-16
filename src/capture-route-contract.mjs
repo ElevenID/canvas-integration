@@ -24,22 +24,39 @@ function rule(value,kind,canBeNull) {
   if(kind==='text' && (!Number.isInteger(value.max_bytes) || value.max_bytes<16 || value.max_bytes>512)) throw unavailable();
 }
 
-/** Validate a fresh public-Gateway snapshot, then discard all Core authority
- * metadata. The HTTP adapter must obtain this snapshot itself and reauthorize
- * its session. Nothing returned here authorizes delivery, verification or issue. */
-export function prepareCaptureRoute(value,snapshot,{platformOrigin,nowMs=Date.now()}={}) {
+// Normalize an original operator intent before receipt reconciliation. This
+// checks structure only; it neither authenticates nor accepts a binding snapshot.
+export function prepareCaptureRouteIntent(value) {
   try {
     if(typeof globalThis.window!=='undefined') throw unavailable();
     exactRecord(value,['producerRef','platformId','bindingId','bindingRevision','requirement','claimNames','effectiveTimePolicy'],'invalid_route');
     if(!id(value.producerRef) || !id(value.platformId) || !bindingId(value.bindingId) || !revision(value.bindingRevision)
-      || !['require_provider_time','as_of_read'].includes(value.effectiveTimePolicy) || !revision(nowMs)) throw unavailable();
-    if(typeof platformOrigin!=='string' || Buffer.byteLength(platformOrigin)>512 || canvasOrigin(platformOrigin)!==platformOrigin) throw unavailable();
+      || !['require_provider_time','as_of_read'].includes(value.effectiveTimePolicy)) throw unavailable();
     object(value.requirement,5);
     for(const name of ['courseId','userId','activityId','moduleId'])
       if(Object.hasOwn(value.requirement,name) && typeof value.requirement[name]!=='string') throw unavailable();
     const plan=prepareRequirement(value.requirement);
     if(!Array.isArray(value.claimNames) || value.claimNames.length<1 || value.claimNames.length>7
       || new Set(value.claimNames).size!==value.claimNames.length || value.claimNames.some(name=>!selected.has(name))) throw unavailable();
+    // Reconstruct primitive configuration; no application, subject, permission,
+    // approval, grant, key or snapshot is persisted as local authority.
+    const requirement={factType:plan.factType,courseId:plan.scope.course_id,userId:plan.scope.user_id};
+    if(plan.scope.activity_id!==undefined) requirement.activityId=plan.scope.activity_id;
+    if(plan.scope.module_id!==undefined) requirement.moduleId=plan.scope.module_id;
+    return Object.freeze({producerRef:value.producerRef,platformId:value.platformId,bindingId:value.bindingId,
+      bindingRevision:value.bindingRevision,requirement:Object.freeze(requirement),
+      claimNames:Object.freeze([...value.claimNames].sort()),effectiveTimePolicy:value.effectiveTimePolicy});
+  } catch {throw unavailable();}
+}
+
+/** Validate a fresh public-Gateway snapshot, then discard all Core authority
+ * metadata. The HTTP adapter must obtain this snapshot itself and reauthorize
+ * its session. Nothing returned here authorizes delivery, verification or issue. */
+export function prepareCaptureRoute(value,snapshot,{platformOrigin,nowMs=Date.now()}={}) {
+  try {
+    value=prepareCaptureRouteIntent(value);
+    if(!revision(nowMs) || typeof platformOrigin!=='string' || Buffer.byteLength(platformOrigin)>512 || canvasOrigin(platformOrigin)!==platformOrigin) throw unavailable();
+    const plan=prepareRequirement(value.requirement);
     object(snapshot,3);
     if(Object.keys(snapshot).sort().join(',')!=='found,record,snapshot_at_ms' || snapshot.found!==true
       || !revision(snapshot.snapshot_at_ms) || Math.abs(snapshot.snapshot_at_ms-nowMs)>30000) throw unavailable();
@@ -66,13 +83,6 @@ export function prepareCaptureRoute(value,snapshot,{platformOrigin,nowMs=Date.no
     const provenance=binding.claim_rules.effective_time_source;
     rule(provenance,'text',false);
     if(provenance.required!==true || provenance.nullable!==false) throw unavailable();
-    // Reconstruct primitive configuration; no application, subject, permission,
-    // approval, grant, key or snapshot is persisted as local authority.
-    const requirement={factType:plan.factType,courseId:plan.scope.course_id,userId:plan.scope.user_id};
-    if(plan.scope.activity_id!==undefined) requirement.activityId=plan.scope.activity_id;
-    if(plan.scope.module_id!==undefined) requirement.moduleId=plan.scope.module_id;
-    return Object.freeze({producerRef:value.producerRef,platformId:value.platformId,bindingId:value.bindingId,
-      bindingRevision:value.bindingRevision,requirement:Object.freeze(requirement),
-      claimNames:Object.freeze([...value.claimNames].sort()),effectiveTimePolicy:value.effectiveTimePolicy});
+    return value;
   } catch {throw unavailable();}
 }

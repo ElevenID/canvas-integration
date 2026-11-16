@@ -6,11 +6,13 @@ worker remains the only path to the public Common Gateway. Capture sends Canvas
 access tokens only to Canvas; it never obtains a Gateway key or accesses a core
 database, private service, approval, verification or signing operation.
 
-Install reviewed candidate schema003 after001/002 using the connector migration
-owner. Route configuration defaults disabled. No public route-administration API,
-role provisioning or startup migration is added here. Provision routing only
-through a reviewed administrative workflow before activation; never accept course,
-learner, platform or binding references directly from an untrusted browser.
+Install the connector migrations through011 using the schema owner; runtime
+installs nothing. Route configuration defaults disabled. The production
+[capture-route administration API](CAPTURE_ROUTE_ADMINISTRATION.md) validates
+configuration against a fresh tenant-scoped public Gateway binding snapshot,
+reauthorizes the operator, and fences local platform/route versions. Browser
+fields alone never authorize course, learner, platform or binding mappings.
+Production role provisioning remains a separate qualification gate.
 
 ## Routing and capture identity
 
@@ -76,7 +78,9 @@ positive canonical millisecond timestamps.
 The candidate provider-neutral Gateway schema clarification in marty-ui commit
 1b0c1abbf3962afa21c9e6ac68e4d2e79c794d23 documents this distinction. The core binding
 must explicitly approve a required, non-null text provenance claim and the
-selected assertion fields. Existing bindings without that field reject this
+selected assertion fields. New administration also requires exact `canvas_origin`
+and reader resource IDs in the canonical binding scope. Existing bindings without
+the provenance field reject this
 projection through the unchanged claim allowlist. A local route is not approval;
 actual current-authority/provenance acceptance and denial remain qualification
 requirements. Neither a timestamp nor provenance grants VERIFIED status, policy
@@ -113,8 +117,8 @@ delayed-write expiry rollback, source immutability and credential separation.
 The Gateway and Canvas endpoints use synthetic HTTPS fixtures; this is not live
 Canvas authorization, live core admission or OB3/wallet acceptance.
 
-Production route administration/least-privilege roles, mandatory core provenance
-binding qualification, scheduler/server shutdown, credential acquisition,
+Production role approval, mandatory deployed Core provenance/binding qualification,
+automatic capture scheduling, deployment shutdown and credential acquisition,
 LTI/AGS/NRPS capture, deployed network isolation/unknown-outcome operations,
 actual Gateway-to-OB3/wallet flow and cross-repository retirement remain required.
 No existing AWS or production resource is changed by these tests.
