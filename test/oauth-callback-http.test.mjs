@@ -3,6 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
 import { createOAuthCallbackHandler } from '../src/oauth-callback-http.mjs';
+import { oauthBrowserBindingCookieName } from '../src/oauth-browser-binding.mjs';
+const browserBinding=Buffer.alloc(32,9).toString('base64url');
 
 const state = 'a'.repeat(43);
 async function fixture(t, options = {}) {
@@ -19,7 +21,7 @@ async function fixture(t, options = {}) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const send = (path, method = 'GET', headers = {}) => new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port: server.address().port, path, method, headers }, res => {
+    const req = request({ host: '127.0.0.1', port: server.address().port, path, method, headers: {Cookie:`${oauthBrowserBindingCookieName(state)}=${browserBinding}`,...headers} }, res => {
       let body = ''; res.on('data', chunk => { body += chunk; });
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
     });
@@ -33,9 +35,10 @@ test('real HTTP callback forwards only validated parameters and redirects withou
   assert.equal(result.status, 303);
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.equal(result.headers['referrer-policy'], 'no-referrer');
+  assert.match(result.headers['set-cookie'][0],/; Secure; HttpOnly; SameSite=Lax; Max-Age=0$/);
   assert.equal(result.body, '');
   assert.doesNotMatch(result.headers.location, /secret-code|aaaaa/);
-  assert.deepEqual({ ...f.inputs[0] }, { state, code: 'secret-code' });
+  assert.deepEqual({ ...f.inputs[0] }, { state, code: 'secret-code',browserBinding });
 });
 for (const query of [
   `state=${state}&state=${state}&code=x`, `state=${state}&%63ode=x&code=y`,
@@ -77,4 +80,12 @@ for (const location of ['https://evil.example/complete?outcome=connected',
 test('requires explicit lifecycle, limiter and fixed HTTPS completion', () => {
   assert.throws(() => createOAuthCallbackHandler());
   assert.throws(() => createOAuthCallbackHandler({ lifecycle: { callback() {} }, completionUrl: 'https://connector.example' }));
+});
+
+test('missing, duplicate or malformed browser proof cookies never reach lifecycle',async t=>{
+  const f=await fixture(t);const name=oauthBrowserBindingCookieName(state);
+  for (const cookie of ['',`${name}=short`,`${name}=${browserBinding}; ${name}=${browserBinding}`,`other=${browserBinding}`]) {
+    assert.equal((await f.send(`/oauth/callback?state=${state}&code=synthetic-code`,'GET',{Cookie:cookie})).status,400);
+  }
+  assert.equal(f.inputs.length,0);
 });

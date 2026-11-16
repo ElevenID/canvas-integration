@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { readOAuthBrowserBinding, expireOAuthBrowserBindingCookie } from './oauth-browser-binding.mjs';
 // Incoming HTTP only. This adapter owns no provider credentials or transport.
 export function createOAuthCallbackHandler({ lifecycle, rateLimiter, completionUrl } = {}) {
   if (typeof globalThis.window !== 'undefined' || typeof lifecycle?.callback !== 'function'
@@ -9,11 +10,13 @@ export function createOAuthCallbackHandler({ lifecycle, rateLimiter, completionU
       || completion.search || completion.hash) throw new Error('invalid_completion_url');
 
   return async function callbackHandler(request, response) {
+    let clearCookie;
     const finish = (status, location) => {
       response.writeHead(status, {
         'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
         'X-Content-Type-Options': 'nosniff', 'Content-Length': '0', Connection: 'close',
         ...(location ? { Location: location } : {}),
+        ...(clearCookie ? { 'Set-Cookie': clearCookie } : {}),
       });
       response.end();
     };
@@ -47,6 +50,10 @@ export function createOAuthCallbackHandler({ lifecycle, rateLimiter, completionU
     if (!/^[A-Za-z0-9_-]{43}$/.test(input.state ?? '')
         || (Object.hasOwn(input, 'code') === Object.hasOwn(input, 'error'))
         || (input.code?.length ?? 0) > 4096 || (input.error?.length ?? 0) > 128) return finish(400);
+    const proof=readOAuthBrowserBinding(request,input.state);
+    if (!proof) return finish(400);
+    input.browserBinding=proof;
+    clearCookie=expireOAuthBrowserBindingCookie(input.state);
     try {
       const result = await lifecycle.callback(input);
       const location = new URL(result.location);
