@@ -16,6 +16,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'bin/serve-workers.mjs': {'../src/worker-service-config.mjs','../src/connector-worker-runtime.mjs'},
  'src/browser-denied.mjs': set(),
  'src/canvas-oauth-provider.mjs': {'./canvas-rest-network.mjs', 'node:https'},
+ 'src/canvas-lti-launch.mjs': {'node:crypto', './private-json.mjs'},
  'src/canvas-oauth.mjs': {'./canvas-rest-network.mjs', 'node:crypto', './oauth-browser-binding.mjs'},
  'src/canvas-rest-contract.mjs': set(),
  'src/canvas-rest-network.mjs': {'node:net', './canvas-rest-contract.mjs', 'node:dns/promises'},
