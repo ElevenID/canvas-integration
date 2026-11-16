@@ -10,6 +10,20 @@ concurrency:
   group: canvas-boundary-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  storage:
+    name: Connector PostgreSQL storage contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Test isolated connector storage and concurrent state consumption
+        run: python3 scripts/test_postgres_storage.py
   boundary:
     name: Boundary and HTTPS tests
     runs-on: ubuntu-latest

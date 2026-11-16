@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { createOAuthBrowserBinding, oauthBrowserBindingCookie } from './oauth-browser-binding.mjs';
 // Inbound HTTP only. authenticateAndAuthorize must consult canonical Gateway
 // authority, never request-supplied tenant or connector-side role mirrors.
 export function createOAuthAdminHandler({ lifecycle, authenticateAndAuthorize, rateLimiter, adminOrigin } = {}) {
@@ -10,10 +11,12 @@ export function createOAuthAdminHandler({ lifecycle, authenticateAndAuthorize, r
   try { origin = new URL(adminOrigin); } catch { throw new Error('invalid_admin_origin'); }
   if (origin.protocol !== 'https:' || origin.origin !== adminOrigin) throw new Error('invalid_admin_origin');
   return async (request, response) => {
+    let browserCookie;
     const finish = (status, value) => {
       const body = value ? JSON.stringify(value) : '';
       response.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body),
-        'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', Connection: 'close' });
+        'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', Connection: 'close',
+        ...(browserCookie ? {'Set-Cookie':browserCookie} : {}) });
       response.end(body);
     };
     const path = /^\/platforms\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/oauth\/start$/.exec(request.url ?? '');
@@ -60,8 +63,22 @@ export function createOAuthAdminHandler({ lifecycle, authenticateAndAuthorize, r
     if (capabilities.length > 32 || new Set(capabilities).size !== capabilities.length
         || capabilities.some(value => !/^[A-Za-z0-9_.-]{1,128}$/.test(value))) return finish(400);
     try {
-      const result = await lifecycle.start({ organizationId: identity.organizationId, platformId: path[1],
+      const browserBinding=createOAuthBrowserBinding();
+      const result = await lifecycle.start({ browserBinding, organizationId: identity.organizationId, platformId: path[1],
         clientId: fields.client_id, clientSecretRef: fields.client_secret_ref, capabilities });
+      // Proof must return to this exact connector origin/path. No substituted
+      // callback or ambiguous state may receive a browser binding cookie.
+      const authorization=new URL(result.authorizationUrl);
+      const redirectUri=new URL('/oauth/callback',origin).href;
+      const state=authorization.searchParams.get('state');
+      if(authorization.protocol!=='https:' || authorization.username || authorization.password || authorization.hash
+          || authorization.pathname!=='/login/oauth2/auth'
+          || authorization.searchParams.getAll('state').length!==1
+          || !/^[A-Za-z0-9_-]{43}$/.test(state??'')
+          || result.redirectUri!==redirectUri
+          || authorization.searchParams.getAll('redirect_uri').length!==1
+          || authorization.searchParams.get('redirect_uri')!==redirectUri) throw Error('invalid_start_result');
+      browserCookie=oauthBrowserBindingCookie(state,browserBinding);
       // Return only the lifecycle's URL; no repository snapshots or secret refs.
       return finish(200, { authorizationUrl: result.authorizationUrl });
     } catch { return finish(409, { error: 'authorization_start_failed' }); }

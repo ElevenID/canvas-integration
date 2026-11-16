@@ -13,6 +13,57 @@ const input = origin => ({
   redirectUri: 'https://connector.example.test/oauth/callback',
 });
 
+test('revocation uses pinned Canvas DELETE with only a Bearer credential and bounded success', async () => {
+  const fixture = await httpsFixture();
+  try {
+    fixture.setHandler((_req, res) => json(res, {}));
+    const provider = createCanvasOAuthProvider({ allowedPrivateAddresses: PRIVATE, ca: fixture.ca });
+    assert.equal(await provider.revoke({ canvasOrigin: fixture.origin, accessToken: 'synthetic-access-token' }), true);
+    assert.equal(fixture.seen[0].method, 'DELETE');
+    assert.equal(fixture.seen[0].url, '/login/oauth2/token');
+    assert.equal(fixture.seen[0].headers.authorization, 'Bearer synthetic-access-token');
+    assert.equal(fixture.seen[0].headers['content-length'], '0');
+    assert.equal(fixture.seen[0].headers['x-api-key'], undefined);
+    assert.equal(fixture.seen[0].headers['x-organization-id'], undefined);
+    fixture.setHandler((_req, res) => { res.writeHead(200); res.end(); });
+    assert.equal(await provider.revoke({ canvasOrigin: fixture.origin, accessToken: 'synthetic-access-token' }), true);
+  } finally { await fixture.close(); }
+});
+
+for (const [status, type, body, code] of [
+  [401, 'application/json', '{}', 'provider_rejected'],
+  [403, 'application/json', '{}', 'provider_rejected'],
+  [302, 'application/json', '{}', 'redirect_denied'],
+  [500, 'application/json', '{}', 'provider_unavailable'],
+  [200, 'text/html', 'login page', 'invalid_content_type'],
+  [200, 'application/json', 'not-json', 'invalid_json'],
+  [200, 'application/json', '[]', 'invalid_revocation_response'],
+  [200, 'application/json', 'x'.repeat(1024), 'response_too_large'],
+]) test(`revocation does not confirm ${status}/${code}`, async () => {
+  const fixture = await httpsFixture();
+  try {
+    fixture.setHandler((_req, res) => { res.writeHead(status, { 'Content-Type': type }); res.end(body); });
+    const provider = createCanvasOAuthProvider({ allowedPrivateAddresses: PRIVATE, ca: fixture.ca, maxResponseBytes: 128 });
+    await assert.rejects(provider.revoke({ canvasOrigin: fixture.origin, accessToken: 'synthetic-access-token' }), { code });
+    assert.equal(fixture.seen.length, 1, 'revocation transport must not retry automatically');
+  } finally { await fixture.close(); }
+});
+
+test('revocation enforces TLS, absolute deadline and credential separation', async () => {
+  const fixture = await httpsFixture();
+  try {
+    const credential = { canvasOrigin: fixture.origin, accessToken: 'synthetic-access-token' };
+    const provider = createCanvasOAuthProvider({ allowedPrivateAddresses: PRIVATE, ca: fixture.ca, timeoutMs: 75 });
+    await assert.rejects(provider.revoke({ ...credential, apiKey: 'never-send' }), { code: 'invalid_request' });
+    await assert.rejects(provider.revoke({ ...credential, accessToken: 'bad\r\nheader' }), { code: 'invalid_request' });
+    assert.equal(fixture.seen.length, 0);
+    fixture.setHandler(() => {});
+    await assert.rejects(provider.revoke(credential), { code: 'timeout' });
+    const untrusted = createCanvasOAuthProvider({ allowedPrivateAddresses: PRIVATE });
+    await assert.rejects(untrusted.revoke(credential), { code: 'transport_error' });
+  } finally { await fixture.close(); }
+});
+
 test('authorization-code exchange uses the fixed Canvas token endpoint and form body', async () => {
   const fixture = await httpsFixture();
   try {

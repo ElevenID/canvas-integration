@@ -5,8 +5,11 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
-import { createOAuthAdminHandler } from '../src/oauth-admin-http.mjs';
 import { createServer, request } from 'node:http';
+import { createOAuthCallbackHandler } from '../src/oauth-callback-http.mjs';
+import { createOAuthAdminHandler } from '../src/oauth-admin-http.mjs';
+import { oauthBrowserBindingCookieName } from '../src/oauth-browser-binding.mjs';
+const BROWSER_BINDING=Buffer.alloc(32,9).toString('base64url');
 
 const ORG = 'org-one';
 const PLATFORM = 'platform-one';
@@ -46,9 +49,9 @@ function fixture(overrides = {}) {
       return overrides.markPending ? overrides.markPending() : org === ORG && id === PLATFORM && version === platform.configVersion;
     },
     async cancelAuthorization(hash) { authorizations.delete(hash); },
-    async consumeAuthorization(hash, time) {
+    async consumeAuthorization(hash, time, browserBindingHash) {
       const value = authorizations.get(hash);
-      if (!value || value.expiresAt <= time) return null;
+      if (!value || value.browserBindingHash!==browserBindingHash || value.expiresAt <= time) return null;
       authorizations.delete(hash);
       return value;
     },
@@ -69,7 +72,7 @@ function fixture(overrides = {}) {
   const vault = {
     async metadata(org, ref) {
       if (org !== ORG || ref !== CLIENT_SECRET_REF) return null;
-      return { organizationId: ORG, enabled: true, provider: 'canvas', purpose: 'oauth_client_secret' };
+      return { organizationId: ORG, platformId: PLATFORM, enabled: true, provider: 'canvas', purpose: 'oauth_client_secret' };
     },
     async get(org, ref) { return org === ORG ? secrets.get(ref) ?? null : null; },
     async put(org, metadata, value) {
@@ -109,38 +112,57 @@ function fixture(overrides = {}) {
 }
 async function started(value, capabilities = ['catalog', 'native_activity_scores']) {
   const result = await value.lifecycle.start({
-    organizationId: ORG, platformId: PLATFORM, clientId: 'canvas-client',
+    browserBinding:BROWSER_BINDING, organizationId: ORG, platformId: PLATFORM, clientId: 'canvas-client',
     clientSecretRef: CLIENT_SECRET_REF, capabilities,
   });
   const url = new URL(result.authorizationUrl);
   return { result, url, state: url.searchParams.get('state'), stored: [...value.authorizations.values()][0] };
 }
 
-test('authenticated admin HTTP start composes with the actual OAuth lifecycle', async t => {
-  const f = fixture();
-  const server = createServer(createOAuthAdminHandler({
-    lifecycle: f.lifecycle, adminOrigin: 'https://connector.example.test',
+async function callbackHttp(t, lifecycle) {
+  const server = createServer(createOAuthCallbackHandler({ lifecycle,
+    completionUrl: 'https://console.example.test/integrations/canvas',
     rateLimiter: { consume: async () => true },
-    authenticateAndAuthorize: async () => ({ organizationId: ORG, authorized: true }),
   }));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
-  const result = await new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port: server.address().port, method: 'POST',
-      path: `/platforms/${PLATFORM}/oauth/start`, headers: { Origin: 'https://connector.example.test',
-        'Content-Type': 'application/x-www-form-urlencoded' } }, res => {
-      let body = ''; res.on('data', chunk => { body += chunk; });
-      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
+  return (parameters,browserBinding=BROWSER_BINDING) => new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port: server.address().port,
+      headers:browserBinding?{Cookie:`${oauthBrowserBindingCookieName(parameters.state)}=${browserBinding}`}:{ },
+      path: '/oauth/callback?' + new URLSearchParams(parameters) }, res => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, location: res.headers.location ? new URL(res.headers.location) : undefined }));
     });
-    req.on('error', reject);
-    req.end(new URLSearchParams({ client_id: 'canvas-client', client_secret_ref: CLIENT_SECRET_REF, capabilities: 'catalog' }).toString());
+    req.on('error', reject); req.end();
   });
-  assert.equal(result.status, 200);
-  assert.equal(f.authorizations.size, 1);
-  const state = new URL(result.body.authorizationUrl).searchParams.get('state');
-  const callback = await f.lifecycle.callback({ state, code: 'synthetic-code' });
-  assert.equal(new URL(callback.location).searchParams.get('outcome'), 'connected');
+}
+
+test('HTTP adapter composes with OAuth lifecycle and rejects state replay', async t => {
+  const f = fixture();
+  const authorization = await started(f);
+  const send = await callbackHttp(t, f.lifecycle);
+  const connected = await send({ state: authorization.state, code: 'synthetic-code' });
+  assert.equal(connected.status, 303);
+  assert.equal(connected.location.searchParams.get('outcome'), 'connected');
   assert.equal(f.connections.size, 1);
+  const repeated = await send({ state: authorization.state, code: 'synthetic-code' });
+  assert.equal(repeated.location.searchParams.get('error_code'), 'oauth_state_invalid');
+  assert.equal(f.calls.filter(call => call[0] === 'exchange').length, 1);
+  assert.equal(f.connections.size, 1);
+});
+
+test('HTTP provider denial consumes state without exchanging or reflecting provider error', async t => {
+  const f = fixture();
+  const authorization = await started(f);
+  const send = await callbackHttp(t, f.lifecycle);
+  const denied = await send({ state: authorization.state, error: 'sensitive-provider-text' });
+  assert.equal(denied.status, 303);
+  assert.equal(denied.location.searchParams.get('error_code'), 'oauth_authorization_denied');
+  assert.doesNotMatch(denied.location.href, /sensitive-provider-text/);
+  const replay = await send({ state: authorization.state, code: 'synthetic-code' });
+  assert.equal(replay.location.searchParams.get('error_code'), 'oauth_state_invalid');
+  assert.equal(f.calls.filter(call => call[0] === 'exchange').length, 0);
+  assert.equal(f.connections.size, 0);
 });
 
 test('start stores only a hash and constructs a fixed Canvas authorization URL', async () => {
@@ -169,7 +191,7 @@ test('start stores only a hash and constructs a fixed Canvas authorization URL',
 test('callback consumes state once, exchanges code and persists only secret references', async () => {
   const f = fixture();
   const { state, stored } = await started(f);
-  const result = await f.lifecycle.callback({ state, code: 'synthetic-auth-code' });
+  const result = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state, code: 'synthetic-auth-code' });
   const location = new URL(result.location);
   assert.equal(location.origin, 'https://console.example.test');
   assert.equal(location.pathname, '/integrations/canvas');
@@ -190,7 +212,7 @@ test('callback consumes state once, exchanges code and persists only secret refe
   assert.equal(exchange.code, 'synthetic-auth-code');
   assert.equal(exchange.redirectUri, 'https://connector.example.test/oauth/callback');
   assert.equal(f.authorizations.size, 0);
-  const replay = await f.lifecycle.callback({ state, code: 'synthetic-auth-code' });
+  const replay = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state, code: 'synthetic-auth-code' });
   assert.equal(new URL(replay.location).searchParams.get('error_code'), 'oauth_state_invalid');
   assert.equal(f.calls.filter(item => item[0] === 'exchange').length, 1);
 });
@@ -199,7 +221,7 @@ test('state is bound to tenant, platform configuration and the fixed callback UR
   const f = fixture();
   const { state } = await started(f);
   f.platform.configVersion += 1;
-  const result = await f.lifecycle.callback({ state, code: 'synthetic-code' });
+  const result = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state, code: 'synthetic-code' });
   assert.equal(new URL(result.location).searchParams.get('error_code'), 'oauth_configuration_changed');
   assert.equal(f.calls.some(item => item[0] === 'exchange'), false);
 });
@@ -207,7 +229,7 @@ test('state is bound to tenant, platform configuration and the fixed callback UR
 test('Canvas authorization denial consumes state and does not exchange a token', async () => {
   const f = fixture();
   const { state } = await started(f);
-  const result = await f.lifecycle.callback({ state, error: 'access_denied' });
+  const result = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state, error: 'access_denied' });
   assert.equal(new URL(result.location).searchParams.get('error_code'), 'oauth_authorization_denied');
   assert.equal(f.authorizations.size, 0);
   assert.equal(f.calls.some(item => item[0] === 'exchange'), false);
@@ -217,9 +239,9 @@ test('expired, malformed and unknown states never reach the provider', async () 
   const f = fixture();
   const { state, stored } = await started(f);
   f.setNow(stored.expiresAt);
-  const expired = await f.lifecycle.callback({ state, code: 'synthetic-code' });
+  const expired = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state, code: 'synthetic-code' });
   assert.equal(new URL(expired.location).searchParams.get('error_code'), 'oauth_state_invalid');
-  const malformed = await f.lifecycle.callback({ state: 'not-a-state', code: 'synthetic-code' });
+  const malformed = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state: 'not-a-state', code: 'synthetic-code' });
   assert.equal(new URL(malformed.location).searchParams.get('error_code'), 'oauth_state_invalid');
   assert.equal(f.calls.some(item => item[0] === 'exchange'), false);
 });
@@ -227,16 +249,16 @@ test('expired, malformed and unknown states never reach the provider', async () 
 test('unsupported capabilities, missing client secret and existing connection fail before state creation', async () => {
   const f = fixture();
   await assert.rejects(f.lifecycle.start({
-    organizationId: ORG, platformId: PLATFORM, clientId: 'canvas-client',
+    browserBinding:BROWSER_BINDING, organizationId: ORG, platformId: PLATFORM, clientId: 'canvas-client',
     clientSecretRef: CLIENT_SECRET_REF, capabilities: ['admin:full'],
   }), { code: 'unsupported_capability' });
   await assert.rejects(f.lifecycle.start({
-    organizationId: ORG, platformId: PLATFORM, clientId: 'canvas-client',
+    browserBinding:BROWSER_BINDING, organizationId: ORG, platformId: PLATFORM, clientId: 'canvas-client',
     clientSecretRef: 'wrong-secret', capabilities: ['catalog'],
   }), { code: 'client_secret_unavailable' });
   f.connections.set(ORG + ':' + PLATFORM, { status: 'connected' });
   await assert.rejects(f.lifecycle.start({
-    organizationId: ORG, platformId: PLATFORM, clientId: 'canvas-client',
+    browserBinding:BROWSER_BINDING, organizationId: ORG, platformId: PLATFORM, clientId: 'canvas-client',
     clientSecretRef: CLIENT_SECRET_REF, capabilities: ['catalog'],
   }), { code: 'connection_exists' });
   assert.equal(f.authorizations.size, 0);
@@ -257,7 +279,7 @@ test('token storage failure cleans earlier token refs and revokes exchanged acce
     return originalPut(...args);
   };
   const { state } = await started(f);
-  const result = await f.lifecycle.callback({ state, code: 'synthetic-code' });
+  const result = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state, code: 'synthetic-code' });
   assert.equal(new URL(result.location).searchParams.get('error_code'), 'oauth_secret_storage_failed');
   assert.deepEqual(f.deleted, ['secret-token-1']);
   assert.equal(f.revoked.length, 1);
@@ -266,14 +288,14 @@ test('token storage failure cleans earlier token refs and revokes exchanged acce
 test('failed connection insert cleans secrets, but uncertain insert preserves them for reconciliation', async () => {
   const denied = fixture({ publish: async () => false });
   const first = await started(denied);
-  const conflict = await denied.lifecycle.callback({ state: first.state, code: 'synthetic-code' });
+  const conflict = await denied.lifecycle.callback({ browserBinding:BROWSER_BINDING, state: first.state, code: 'synthetic-code' });
   assert.equal(new URL(conflict.location).searchParams.get('error_code'), 'oauth_authorization_conflict');
   assert.deepEqual(denied.deleted, ['secret-token-1', 'secret-token-2']);
   assert.equal(denied.revoked.length, 1);
 
   const uncertain = fixture({ publish: async () => { throw new Error('commit acknowledgment lost'); } });
   const second = await started(uncertain);
-  const result = await uncertain.lifecycle.callback({ state: second.state, code: 'synthetic-code' });
+  const result = await uncertain.lifecycle.callback({ browserBinding:BROWSER_BINDING, state: second.state, code: 'synthetic-code' });
   assert.equal(new URL(result.location).searchParams.get('error_code'), 'oauth_connection_reconciliation_required');
   assert.deepEqual(uncertain.deleted, []);
   assert.equal(uncertain.revoked.length, 0);
@@ -282,7 +304,7 @@ test('failed connection insert cleans secrets, but uncertain insert preserves th
 test('post-publication platform race preserves durable tokens and marks reauthorization', async () => {
   const f = fixture({ markConnected: () => false });
   const { state } = await started(f);
-  const result = await f.lifecycle.callback({ state, code: 'synthetic-code' });
+  const result = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING, state, code: 'synthetic-code' });
   assert.equal(new URL(result.location).searchParams.get('error_code'), 'oauth_configuration_changed');
   assert.equal(f.connections.size, 1);
   assert.deepEqual(f.deleted, []);
@@ -292,7 +314,7 @@ test('post-publication platform race preserves durable tokens and marks reauthor
 test('callback response never reflects caller-controlled redirect or error text', async () => {
   const f = fixture();
   const { state } = await started(f);
-  const result = await f.lifecycle.callback({
+  const result = await f.lifecycle.callback({ browserBinding:BROWSER_BINDING,
     state, code: '', error: 'https://attacker.example/?token=secret',
   });
   const location = new URL(result.location);
@@ -303,7 +325,7 @@ test('callback response never reflects caller-controlled redirect or error text'
 
 test('Canvas OAuth modules fail closed under browser export conditions', async () => {
   const run = promisify(execFile);
-  for (const name of ['canvas-oauth', 'canvas-oauth-provider']) {
+  for (const name of ['canvas-oauth', 'canvas-oauth-provider','oauth-browser-binding']) {
     await assert.rejects(run(process.execPath, [
       '--conditions=browser', '--input-type=module', '-e',
       `await import('@elevenid/canvas-integration/${name}')`,
@@ -312,4 +334,71 @@ test('Canvas OAuth modules fail closed under browser export conditions', async (
       return true;
     });
   }
+});
+
+test('different or missing initiating browser proof never consumes state or exchanges code', async t => {
+  const f=fixture();const {state,stored}=await started(f);
+  assert.equal(stored.browserBindingHash,createHash('sha256').update(BROWSER_BINDING).digest('hex'));
+  assert.equal(JSON.stringify(stored).includes(BROWSER_BINDING),false);
+  const send=await callbackHttp(t,f.lifecycle);
+  const missing=await send({state,code:'synthetic-victim-code'},null);
+  assert.equal(missing.status,400);
+  const wrong=await send({state,code:'synthetic-victim-code'},Buffer.alloc(32,11).toString('base64url'));
+  assert.equal(wrong.location.searchParams.get('error_code'),'oauth_state_invalid');
+  assert.equal(f.authorizations.size,1);
+  assert.equal(f.calls.filter(c=>c[0]==='exchange').length,0);
+  assert.equal(f.connections.size,0);
+  const legitimate=await send({state,code:'synthetic-legitimate-code'});
+  assert.equal(legitimate.location.searchParams.get('outcome'),'connected');
+  assert.equal(f.authorizations.size,0);
+  assert.equal(f.calls.filter(c=>c[0]==='exchange').length,1);
+});
+test('service lifecycle denies missing browser binding before storing or consuming state',async()=>{
+  const f=fixture();
+  await assert.rejects(f.lifecycle.start({organizationId:ORG,platformId:PLATFORM,clientId:'canvas-client',clientSecretRef:CLIENT_SECRET_REF,capabilities:['catalog']}),/invalid_oauth_browser_binding/);
+  const {state}=await started(f);
+  const result=await f.lifecycle.callback({state,code:'synthetic-victim-code'});
+  assert.equal(new URL(result.location).searchParams.get('error_code'),'oauth_state_invalid');
+  assert.equal(f.authorizations.size,1);
+  assert.equal(f.calls.filter(c=>c[0]==='exchange').length,0);
+});
+test('client secret platform metadata is enforced at start and callback',async()=>{
+  const f=fixture();
+  f.vault.metadata=async()=>({organizationId:ORG,platformId:'other-platform',enabled:true,provider:'canvas',purpose:'oauth_client_secret'});
+  await assert.rejects(started(f),{code:'client_secret_unavailable'});
+  assert.equal(f.authorizations.size,0);
+  const other=fixture();const {state}=await started(other);
+  other.vault.metadata=f.vault.metadata;
+  const result=await other.lifecycle.callback({browserBinding:BROWSER_BINDING,state,code:'synthetic-code'});
+  assert.equal(new URL(result.location).searchParams.get('error_code'),'oauth_configuration_changed');
+  assert.equal(other.calls.filter(c=>c[0]==='exchange').length,0);
+});
+
+test('authenticated start HTTP sets browser proof that completes its callback',async t=>{
+  const f=fixture();const server=createServer(createOAuthAdminHandler({
+    lifecycle:f.lifecycle,adminOrigin:'https://connector.example.test',rateLimiter:{consume:async()=>true},
+    authenticateAndAuthorize:async()=>({organizationId:ORG,authorized:true}),
+  }));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const started=await new Promise((resolve,reject)=>{
+    const req=request({host:'127.0.0.1',port:server.address().port,method:'POST',path:`/platforms/${PLATFORM}/oauth/start`,
+      headers:{Origin:'https://connector.example.test','Content-Type':'application/x-www-form-urlencoded'}},res=>{
+        let body='';res.on('data',chunk=>{body+=chunk;});res.on('end',()=>resolve({status:res.statusCode,body,headers:res.headers}));
+      });
+    req.on('error',reject);req.end(new URLSearchParams({client_id:'canvas-client',client_secret_ref:CLIENT_SECRET_REF,capabilities:'catalog'}).toString());
+  });
+  assert.equal(started.status,200);
+  const state=new URL(JSON.parse(started.body).authorizationUrl).searchParams.get('state');
+  const cookie=started.headers['set-cookie'][0].split(';')[0];
+  assert.equal(cookie.split('=')[0],oauthBrowserBindingCookieName(state));
+  const proof=cookie.split('=')[1];
+  assert.equal([...f.authorizations.values()][0].browserBindingHash,createHash('sha256').update(proof).digest('hex'));
+  assert.equal(started.body.includes(proof),false);
+  const callback=await callbackHttp(t,f.lifecycle);
+  assert.equal((await callback({state,code:'synthetic-victim-code'},null)).status,400);
+  assert.equal(f.authorizations.size,1);
+  const completed=await callback({state,code:'synthetic-real-code'},proof);
+  assert.equal(completed.location.searchParams.get('outcome'),'connected');
+  assert.equal(f.connections.size,1);
 });

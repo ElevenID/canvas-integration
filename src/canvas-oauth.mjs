@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { createHash, randomBytes as secureRandomBytes } from 'node:crypto';
 import { canvasOrigin } from './canvas-rest-network.mjs';
+import { hashOAuthBrowserBinding, matchesOAuthBrowserBindingHash } from './oauth-browser-binding.mjs';
 
 const AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -147,8 +148,9 @@ export function createCanvasOAuthLifecycle(configuration) {
   return Object.freeze({
     async start(input) {
       if (!isRecord(input) || Object.keys(input).some(key => ![
-        'organizationId', 'platformId', 'clientId', 'clientSecretRef', 'capabilities',
+        'organizationId', 'platformId', 'clientId', 'clientSecretRef', 'capabilities', 'browserBinding',
       ].includes(key))) fail('invalid_start_request');
+      const browserBindingHash=hashOAuthBrowserBinding(input.browserBinding);
       const { organizationId, platformId } = input;
       if (!validId(organizationId) || !validId(platformId)) fail('invalid_tenant_or_platform');
       const platform = await repository.getPlatform(organizationId, platformId);
@@ -162,7 +164,7 @@ export function createCanvasOAuthLifecycle(configuration) {
       if (!safeText(input.clientId, 512) || input.clientId.trim() !== input.clientId) fail('invalid_client_id');
       if (!safeText(input.clientSecretRef, 256)) fail('invalid_client_secret_reference');
       const metadata = await vault.metadata(organizationId, input.clientSecretRef);
-      if (!isRecord(metadata) || metadata.organizationId !== organizationId || metadata.enabled !== true
+      if (!isRecord(metadata) || metadata.organizationId !== organizationId || metadata.platformId !== platformId || metadata.enabled !== true
           || metadata.provider !== 'canvas' || metadata.purpose !== 'oauth_client_secret') fail('client_secret_unavailable');
       const capabilities = normalizeCapabilities(input.capabilities);
       const scopes = scopesForCapabilities(capabilities);
@@ -180,6 +182,7 @@ export function createCanvasOAuthLifecycle(configuration) {
         clientId: input.clientId,
         clientSecretRef: input.clientSecretRef,
         stateHash: stateHash(state),
+        browserBindingHash,
         capabilities,
         scopes,
         redirectUri,
@@ -200,14 +203,20 @@ export function createCanvasOAuthLifecycle(configuration) {
     },
 
     async callback(input) {
-      if (!isRecord(input) || Object.keys(input).some(key => !['state', 'code', 'error'].includes(key))
+      if (!isRecord(input) || Object.keys(input).some(key => !['state', 'code', 'error', 'browserBinding'].includes(key))
           || typeof input.state !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.state)) {
         return Object.freeze({ location: completionLocation(completionBase, 'error', undefined, 'oauth_state_invalid') });
       }
+      let browserBindingHash;
+      try {browserBindingHash=hashOAuthBrowserBinding(input.browserBinding);} catch {
+        return Object.freeze({location:completionLocation(completionBase,'error',undefined,'oauth_state_invalid')});
+      }
       const now = clock();
       if (!Number.isSafeInteger(now) || now <= 0) fail('clock_unavailable');
-      const authorization = await repository.consumeAuthorization(stateHash(input.state), now);
-      if (!isRecord(authorization) || authorization.stateHash !== stateHash(input.state)
+      // Repository must compare both hashes atomically before consuming state.
+      const authorization = await repository.consumeAuthorization(stateHash(input.state), now, browserBindingHash);
+      if (!isRecord(authorization) || !matchesOAuthBrowserBindingHash(authorization.browserBindingHash,input.browserBinding)
+          || authorization.stateHash !== stateHash(input.state)
           || !Number.isSafeInteger(authorization.expiresAt) || authorization.expiresAt <= now) {
         return Object.freeze({ location: completionLocation(completionBase, 'error', undefined, 'oauth_state_invalid') });
       }
@@ -243,11 +252,11 @@ export function createCanvasOAuthLifecycle(configuration) {
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_authorization_denied') });
       }
       const metadata = await vault.metadata(organizationId, authorization.clientSecretRef);
-      if (!isRecord(metadata) || metadata.organizationId !== organizationId || metadata.enabled !== true
+      if (!isRecord(metadata) || metadata.organizationId !== organizationId || metadata.platformId !== platformId || metadata.enabled !== true
           || metadata.provider !== 'canvas' || metadata.purpose !== 'oauth_client_secret') {
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_configuration_changed') });
       }
-      const clientSecret = await vault.get(organizationId, authorization.clientSecretRef);
+      const clientSecret = await vault.get(organizationId, authorization.clientSecretRef, {platformId,provider:'canvas',purpose:'oauth_client_secret'});
       if (!safeText(clientSecret, 4096)) {
         return Object.freeze({ location: completionLocation(completionBase, 'error', platformId, 'oauth_configuration_changed') });
       }

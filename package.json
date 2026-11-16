@@ -35,6 +35,36 @@
       "node": "./src/canvas-oauth-provider.mjs",
       "default": "./src/browser-denied.mjs"
     },
+    "./postgres-repository": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/postgres-repository.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./encrypted-vault": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/encrypted-vault.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./revocation-worker": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/revocation-worker.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./refresh-worker": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/refresh-worker.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./oauth-callback-http": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/oauth-callback-http.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./oauth-browser-binding": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/oauth-browser-binding.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
     "./oauth-admin-http": {
       "browser": "./src/browser-denied.mjs",
       "node": "./src/oauth-admin-http.mjs",

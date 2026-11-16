@@ -7,6 +7,8 @@ import { createGatewayAdminAuthenticator } from '../src/gateway-admin-auth.mjs';
 import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
 
 const origin = 'https://connector.example.test';
+const state=Buffer.alloc(32,6).toString('base64url');
+const authorizationUrl=`https://canvas.example.test/login/oauth2/auth?state=${state}&redirect_uri=${encodeURIComponent(origin+'/oauth/callback')}`;
 const form = 'client_id=client&client_secret_ref=opaque-ref&capabilities=catalog';
 async function fixture(t, overrides = {}) {
   const calls = [];
@@ -16,7 +18,7 @@ async function fixture(t, overrides = {}) {
       assert.deepEqual(operation, { platformId: 'platform', action: 'integration-connector:edit' });
       return { organizationId: 'authenticated-org', authorized: true };
     },
-    lifecycle: { async start(value) { calls.push(value); return { authorizationUrl: 'https://canvas.example.test/login/oauth2/auth?state=synthetic' }; } },
+    lifecycle: { async start(value) { calls.push(value); return {authorizationUrl,redirectUri:origin+'/oauth/callback'}; } },
     ...overrides,
   }));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -36,11 +38,16 @@ test('admin start derives tenant from authenticated context and exposes only aut
   const f = await fixture(t);
   const response = await f.send(form, { 'X-Organization-ID': 'spoofed-org' });
   assert.equal(response.status, 200);
-  assert.deepEqual(f.calls, [{ organizationId: 'authenticated-org', platformId: 'platform', clientId: 'client',
+  assert.equal(typeof f.calls[0].browserBinding,'string');
+  assert.equal(Buffer.from(f.calls[0].browserBinding,'base64url').length,32);
+  const {browserBinding,...started}=f.calls[0];
+  assert.deepEqual([started], [{ organizationId: 'authenticated-org', platformId: 'platform', clientId: 'client',
     clientSecretRef: 'opaque-ref', capabilities: ['catalog'] }]);
   assert.deepEqual(Object.keys(JSON.parse(response.body)), ['authorizationUrl']);
   assert.doesNotMatch(response.body, /opaque-ref|spoofed-org/);
   assert.equal(response.headers['cache-control'], 'no-store');
+  assert.match(response.headers['set-cookie'][0],/; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=600$/);
+  assert.equal(response.body.includes(browserBinding),false);
 });
 for (const [identity, status] of [[null, 401], [{ authorized: false, organizationId: 'org' }, 403],
   [{ authorized: true }, 403]]) test(`admin authority rejection ${status}`, async t => {
@@ -89,4 +96,21 @@ test('admin HTTP uses the concrete public Gateway session/permission authenticat
     assert.equal(f.calls.length, 1, 'revoked permission must stop the next lifecycle start');
     assert.equal(gateway.seen.length, 4);
   } finally { await gateway.close(); }
+});
+
+test('each authorized start gets a fresh server proof and rejects caller binding input',async t=>{
+  const f=await fixture(t);const first=await f.send();const second=await f.send();
+  assert.equal(first.status,200);assert.equal(second.status,200);
+  assert.notEqual(f.calls[0].browserBinding,f.calls[1].browserBinding);
+  assert.notEqual(first.headers['set-cookie'][0],second.headers['set-cookie'][0]);
+  assert.equal((await f.send(form+'&browserBinding=attacker')).status,400);
+});
+for(const result of [
+  {authorizationUrl,redirectUri:'https://other.example/oauth/callback'},
+  {authorizationUrl:authorizationUrl+'&state=duplicate',redirectUri:origin+'/oauth/callback'},
+  {authorizationUrl:authorizationUrl.replace('https:','http:'),redirectUri:origin+'/oauth/callback'},
+  {authorizationUrl:authorizationUrl.replace(encodeURIComponent(origin+'/oauth/callback'),encodeURIComponent('https://other.example/oauth/callback')),redirectUri:origin+'/oauth/callback'},
+]) test('invalid lifecycle callback/state response never issues browser cookie',async t=>{
+  const f=await fixture(t,{lifecycle:{start:async()=>result}});const response=await f.send();
+  assert.equal(response.status,409);assert.equal(response.headers['set-cookie'],undefined);
 });

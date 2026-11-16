@@ -39,9 +39,9 @@ function validateTokenResponse(value) {
     ...(value.expires_in === undefined ? {} : { expiresInSeconds: value.expires_in }),
   });
 }
-function requestToken(origin, form, options, signal, pinned) {
+function requestToken(origin, form, options, signal, pinned, accessToken) {
   const url = new URL('/login/oauth2/token', origin);
-  const payload = Buffer.from(new URLSearchParams(form).toString(), 'utf8');
+  const payload = accessToken === undefined ? Buffer.from(new URLSearchParams(form).toString(), 'utf8') : Buffer.alloc(0);
   return new Promise((resolve, reject) => {
     let settled = false;
     let req;
@@ -52,7 +52,7 @@ function requestToken(origin, form, options, signal, pinned) {
     };
     try {
       req = request(url, {
-        method: 'POST',
+        method: accessToken === undefined ? 'POST' : 'DELETE',
         agent: false,
         rejectUnauthorized: true,
         minVersion: 'TLSv1.2',
@@ -66,6 +66,7 @@ function requestToken(origin, form, options, signal, pinned) {
           'Accept-Encoding': 'identity',
           'Content-Type': 'application/x-www-form-urlencoded',
           'Content-Length': payload.length,
+          ...(accessToken === undefined ? {} : { Authorization: `Bearer ${accessToken}` }),
         },
         ...(options.ca === undefined ? {} : { ca: options.ca }),
       }, response => {
@@ -81,7 +82,8 @@ function requestToken(origin, form, options, signal, pinned) {
             ? retryAfter(response.headers['retry-after']) : undefined));
         }
         const type = String(response.headers['content-type'] ?? '').toLowerCase().split(';');
-        if (!['application/json', 'application/json+canvas-string-ids'].includes(type[0].trim())
+        if (!(accessToken !== undefined && type[0].trim() === '')
+            && !['application/json', 'application/json+canvas-string-ids'].includes(type[0].trim())
             || type.slice(1).some(part => !/^\s*charset=(?:"?utf-8"?)\s*$/.test(part))
             || !['', 'identity'].includes(String(response.headers['content-encoding'] ?? '').toLowerCase())) {
           return finish(new CanvasOAuthProviderError('invalid_content_type'));
@@ -95,11 +97,18 @@ function requestToken(origin, form, options, signal, pinned) {
         });
         response.on('end', () => {
           if (settled) return;
+          if (accessToken !== undefined && size === 0) return finish(null, true);
+          if (accessToken !== undefined && type[0].trim() === '') return finish(new CanvasOAuthProviderError('invalid_content_type'));
           let value;
           try {
             value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
           } catch { return finish(new CanvasOAuthProviderError('invalid_json')); }
-          try { finish(null, validateTokenResponse(value)); }
+          try {
+            if (accessToken !== undefined) {
+              if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('invalid_revocation_response');
+              finish(null, true);
+            } else finish(null, validateTokenResponse(value));
+          }
           catch (error) { finish(error instanceof CanvasOAuthProviderError ? error : new CanvasOAuthProviderError('invalid_token_response')); }
         });
       });
@@ -129,12 +138,15 @@ export function createCanvasOAuthProvider(configuration) {
   async function execute(input, grantType) {
     if (input === null || typeof input !== 'object' || Array.isArray(input)) fail('invalid_request');
     const origin = canvasOrigin(input.canvasOrigin);
-    const required = grantType === 'authorization_code'
+    const revocation = grantType === 'revoke';
+    if (revocation && Object.keys(input).some(key => !['canvasOrigin', 'accessToken'].includes(key))) fail('invalid_request');
+    if (revocation && (typeof input.accessToken !== 'string' || !/^[A-Za-z0-9._~+/-]{16,4096}={0,2}$/.test(input.accessToken))) fail('invalid_request');
+    const required = revocation ? ['accessToken'] : grantType === 'authorization_code'
       ? ['clientId', 'clientSecret', 'code', 'redirectUri']
       : ['clientId', 'clientSecret', 'refreshToken'];
     if (required.some(key => typeof input[key] !== 'string' || !input[key] || input[key].length > 4096
         || /[\u0000-\u001f\u007f-\u009f]/.test(input[key]))) fail('invalid_request');
-    const form = {
+    const form = revocation ? {} : {
       grant_type: grantType,
       client_id: input.clientId,
       client_secret: input.clientSecret,
@@ -147,7 +159,7 @@ export function createCanvasOAuthProvider(configuration) {
     try {
       const pinned = await resolveAddress(origin, allowedPrivateAddresses, controller.signal);
       if (controller.signal.aborted) fail('timeout');
-      return await requestToken(origin, form, options, controller.signal, pinned);
+      return await requestToken(origin, form, options, controller.signal, pinned, revocation ? input.accessToken : undefined);
     } catch (error) {
       if (error instanceof CanvasOAuthProviderError) throw error;
       if (controller.signal.aborted) fail('timeout');
@@ -160,5 +172,6 @@ export function createCanvasOAuthProvider(configuration) {
   return Object.freeze({
     exchange(input) { return execute(input, 'authorization_code'); },
     refresh(input) { return execute(input, 'refresh_token'); },
+    revoke(input) { return execute(input, 'revoke'); },
   });
 }

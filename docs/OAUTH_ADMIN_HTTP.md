@@ -54,3 +54,28 @@ permission denies the next request. Lifecycle composition tests use synthetic
 repository/vault/provider adapters. These contract tests do not establish a
 deployed Gateway session, production authorization or live Canvas qualification.
 Actual login/reverse-proxy wiring and deployed negative tests remain required.
+
+## Browser-bound transaction cookie
+
+After canonical Gateway authorization, this handler generates a fresh 256-bit
+proof using `createOAuthBrowserBinding()` and passes it to the lifecycle. It
+never accepts browser proof as a form field. The lifecycle persists only its
+hash. The returned state must occur exactly once in a valid HTTPS Canvas
+authorization URL; both lifecycle redirectUri and URL redirect_uri must equal
+this admin origin's `/oauth/callback`. Substituted callback hosts or ambiguous
+states produce a redacted failure and no cookie.
+
+Successful start sets the per-state __Host cookie from oauth-browser-binding:
+Secure, HttpOnly, SameSite=Lax, Path=/, no Domain, ten-minute expiry. The JSON
+response remains authorizationUrl only; proof must never enter a URL, JSON,
+logs or traces. Cookie/Set-Cookie headers require log redaction too. The callback
+requires the proof and the PostgreSQL adapter atomically matches its hash before
+state consumption. A different browser cannot complete an attacker-shared URL.
+
+Synthetic composition tests cover the concrete public Gateway authenticator,
+HTTP start/callback handlers, actual PostgreSQL repository, encrypted vault and
+pinned Canvas HTTPS provider together. They verify permission denial, missing
+browser proof, successful custody, replay and credential separation. Tests use
+an HTTP browser fixture that manually returns cookies; actual browser cookie
+policy, login/proxy session availability, deployment and Canvas remain separate
+qualification requirements.
