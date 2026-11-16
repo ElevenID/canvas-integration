@@ -2,12 +2,16 @@
 
 ## Enforced in these slices
 
-Only `src/gateway-client.mjs` owns **connector-to-ElevenID** network requests.
-A caller selects a named, reviewed operation, not an arbitrary URL. The HTTPS
+The reviewed Gateway client, unsigned-observation submitter and browser-admin
+authenticator own **connector-to-ElevenID** network requests, all through the
+public Common Gateway. The compatibility client selects a named operation, not
+an arbitrary URL. Its HTTPS
 Gateway origin and organization are fixed for the client lifetime. Incoming
 headers, keys, URL overrides and organization substitutions are not accepted.
-Every core request carries the server-side API key; no session-cookie fallback
-exists. The registry exposes neither internal APIs nor signing/approval operations.
+API operations carry server-side API keys; unsigned submission requires the exact
+`evidence:submit` scope. Browser administration forwards only the configured
+session cookie to Gateway's public session/permission reads. It never substitutes
+for API-key submission. The registry exposes no internal or signing/approval API.
 
 The independent `src/canvas-rest-reader.mjs` owns **Canvas-side** GET requests.
 Its import graph cannot reach the Gateway client, core configuration or storage.
@@ -28,11 +32,12 @@ injected connector-owned vault; durable records contain opaque references.
 Token exchange is pinned to a vetted Canvas address with verified TLS, no
 redirects, bounded response bytes and one absolute deadline.
 
-These modules are a lifecycle engine, not a deployed OAuth service. The
-repository/vault interfaces require production adapters; no in-memory or
-plaintext fallback is shipped. The callback HTTP adapter, encrypted connector
-vault, transactional connector database, refresh leases and durable revocation
-worker remain unimplemented. See `OAUTH_PROVIDER.md`.
+The standalone HTTPS service composes concrete PostgreSQL, OpenBao, encrypted
+vault, Gateway session authentication, OAuth start/callback and operator recovery
+adapters. Refresh/revocation workers, capture and observation outbox are implemented
+and physically tested; worker scheduling and production deployment remain open.
+There is no in-memory or plaintext production fallback. See `OAUTH_PROVIDER.md`,
+`SERVICE_BOOTSTRAP.md` and `OAUTH_ATTEMPT_RECOVERY.md`.
 
 CLI configuration rejects inherited core database/service credentials. Future
 connector-owned storage must use distinct configuration and credentials, not
@@ -86,8 +91,8 @@ mapping; OAuth token possession alone does not authorize arbitrary browser IDs.
    application/subject linking, result/status reads and delivery acknowledgments.
    Never expose internal endpoints or simply assert that external facts are
    trusted. Bind sources, evidence types and tenant authority through policy.
-3. Complete the connector-owned OAuth repository, encrypted vault, callback
-   HTTP adapter, refresh/revocation worker and LTI/AGS/NRPS providers. Qualify
+3. Complete production role/deployment qualification, worker scheduling, unknown
+   OAuth outcome resolution and LTI/AGS/NRPS providers. Qualify
    the extracted OAuth and REST adapters against a synthetic Canvas tenant
    before replacing the in-core implementation. Keep tool signing distinct
    from canonical credential signing. Do not call legacy event ingest as an

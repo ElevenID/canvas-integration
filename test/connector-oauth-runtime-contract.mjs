@@ -9,6 +9,7 @@ import { request } from 'node:https';
 import { createConnection } from 'node:net';
 import { setImmediate, setTimeout as pause } from 'node:timers/promises';
 import { createConnectorPostgresPool } from '../src/postgres-pool.mjs';
+import { createPostgresRepository } from '../src/postgres-repository.mjs';
 import { createOpenBaoKeyProvider } from '../src/openbao-key-provider.mjs';
 import { createEncryptedVault } from '../src/encrypted-vault.mjs';
 import { createOAuthHttpRateLimiter } from '../src/oauth-http-rate-limiter.mjs';
@@ -204,6 +205,7 @@ try {
     GRANT SELECT,INSERT ON canvas_connector.secrets TO canvas_oauth_http;
     GRANT SELECT,INSERT,DELETE ON canvas_connector.authorizations TO canvas_oauth_http;
     GRANT SELECT,INSERT,UPDATE ON canvas_connector.authorization_attempts TO canvas_oauth_http;
+    GRANT SELECT,INSERT ON canvas_connector.authorization_recovery_audit,canvas_connector.revocation_jobs TO canvas_oauth_http;
     GRANT SELECT,INSERT,UPDATE ON canvas_connector.oauth_status,canvas_connector.connections TO canvas_oauth_http;
     GRANT UPDATE(hits,window_started_at) ON canvas_connector.oauth_http_limit TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION canvas_connector.consume_oauth_http_limit(),
@@ -211,6 +213,8 @@ try {
       canvas_connector.begin_authorization_exchange(text,text,text),
       canvas_connector.require_authorization_reconciliation(text,text,text),
       canvas_connector.publish_authorization_connection(text,text,text),
+      canvas_connector.recover_authorization_attempt(text,text,text,bigint,uuid,text,text) TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION
       canvas_connector.stage_authorization_result(text,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamptz),
       canvas_connector.mark_authorization_pending(text,text,bigint,text),
       canvas_connector.check_connection_configuration() TO canvas_oauth_http;`);
@@ -240,9 +244,39 @@ try {
     await assert.rejects(httpPool.query('DELETE FROM canvas_connector.secrets'));
     await assert.rejects(httpPool.query("UPDATE canvas_connector.secrets SET created_at=clock_timestamp()-interval '1 day'"));
     await assert.rejects(httpPool.query('UPDATE canvas_connector.secrets SET enabled=true'));
+    await assert.rejects(httpPool.query('UPDATE canvas_connector.revocation_jobs SET completed_at=clock_timestamp()'));
+    await assert.rejects(httpPool.query("UPDATE canvas_connector.authorization_recovery_audit SET actor_id='forged'"));
     assert.equal((await httpPool.query("SELECT has_schema_privilege(current_user,'canvas_connector','CREATE') AS allowed")).rows[0].allowed, false);
   } finally { await httpPool.close(); }
   const server = fileCustody ? await cliRuntime() : await runtime(); const address = await server.listen();
+  const recoveryRepository=createPostgresRepository(pool), recoveryHash='d'.repeat(64), recoveryNow=Date.now();
+  await recoveryRepository.saveAuthorization({stateHash:recoveryHash,browserBindingHash:'c'.repeat(64),
+    organizationId:org,platformId:'runtime-platform',platformConfigVersion:1,canvasOrigin:canvas.origin,
+    clientId:'recovery-client',clientSecretRef:reference,capabilities:['catalog'],scopes:['read'],redirectUri:origin+'/oauth/callback',
+    createdAt:recoveryNow,expiresAt:recoveryNow+600000});
+  await recoveryRepository.markAuthorizationPending(org,'runtime-platform',1,recoveryHash);
+  await recoveryRepository.consumeAuthorizationAttempt(recoveryHash,'c'.repeat(64));
+  const recoveryPath='/platforms/runtime-platform/oauth/attempts/';
+  const inspectionForm=new URLSearchParams({authorization_id:recoveryHash}).toString();
+  permitted=false;
+  assert.equal((await send(address,{path:recoveryPath+'inspect',body:inspectionForm}).response).status,403);
+  permitted=true;
+  const inspected=await send(address,{path:recoveryPath+'inspect',body:inspectionForm}).response;
+  assert.equal(inspected.status,200);assert.equal(inspected.headers['cache-control'],'no-store');
+  const recoverySnapshot=JSON.parse(inspected.body).attempt;assert.equal(recoverySnapshot.phase,'consumed');
+  assert.equal(inspected.body.includes(reference),false);assert.equal(inspected.body.includes(CLIENT),false);
+  const recoveryOperation='10000000-0000-4000-8000-000000000002';
+  const recoveryForm=new URLSearchParams({authorization_id:recoveryHash,operation_id:recoveryOperation,
+    expected_revision:String(recoverySnapshot.revision),action:'abandon_unstarted'}).toString();
+  const recovered=await send(address,{path:recoveryPath+'recover',body:recoveryForm}).response;
+  assert.equal(recovered.status,200);assert.equal(JSON.parse(recovered.body).receipt.actorId,'actor');
+  assert.equal(JSON.parse(recovered.body).receipt.phase,'abandoned');
+  const replayedRecovery=await send(address,{path:recoveryPath+'recover',body:recoveryForm}).response;
+  assert.equal(replayedRecovery.status,200);assert.deepEqual(JSON.parse(replayedRecovery.body),JSON.parse(recovered.body));
+  const readReceipt=await send(address,{path:recoveryPath+'receipt',body:new URLSearchParams({authorization_id:recoveryHash,operation_id:recoveryOperation}).toString()}).response;
+  assert.equal(readReceipt.status,200);assert.deepEqual(JSON.parse(readReceipt.body),JSON.parse(recovered.body));
+  assert.equal((await pool.query('SELECT actor_id FROM canvas_connector.authorization_recovery_audit WHERE organization_id=$1 AND operation_id=$2',[org,recoveryOperation])).rows[0].actor_id,'actor');
+  console.log('Actual public Gateway session/permission to production HTTPS listener/limited HTTP role recovery, immutable actor audit and receipt replay contracts passed');
   const started = await send(address, { body: new URLSearchParams({ client_id: 'runtime-client', client_secret_ref: reference, capabilities: 'catalog' }).toString() }).response;
   assert.equal(started.status, 200);
   const authorization = new URL(JSON.parse(started.body).authorizationUrl);

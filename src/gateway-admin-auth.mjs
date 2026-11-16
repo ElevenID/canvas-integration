@@ -69,13 +69,13 @@ export function createGatewayAdminAuthenticator({ gatewayOrigin, adminOrigin, se
       const session = await read('/v1/auth/me', cookie, controller.signal);
       if (!session || session.authenticated !== true) return null;
       const user = session.user;
-      if (!user || typeof user.user_id !== 'string' || !user.user_id || user.organization_context_unavailable === true
+      if (!user || typeof user.user_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(user.user_id) || user.organization_context_unavailable === true
           || typeof user.organization_id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(user.organization_id)) return null;
       const permissions = await read(`/v1/organizations/${user.organization_id}/members/me/permissions`, cookie, controller.signal);
       const authorized = permissions !== null && Array.isArray(permissions.permissions)
         && permissions.permissions.every(value => typeof value === 'string')
         && permissions.permissions.includes('integration-connector:edit');
-      return Object.freeze({ organizationId: user.organization_id, authorized });
+      return Object.freeze({ organizationId: user.organization_id, actorId: user.user_id, authorized });
     } catch { fail(); } finally { clearTimeout(timer); }
   };
 }

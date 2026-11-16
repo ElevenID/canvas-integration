@@ -16,6 +16,7 @@ import { createOAuthCallbackHandler } from '../src/oauth-callback-http.mjs';
 import { createGatewayAdminAuthenticator } from '../src/gateway-admin-auth.mjs';
 import { initialOAuthCustodyContract } from './initial-oauth-custody-contract.mjs';
 import { initialOAuthLifecycleContract } from './initial-oauth-lifecycle-contract.mjs';
+import { oauthAttemptRecoveryContract } from './oauth-attempt-recovery-contract.mjs';
 
 const container = process.argv[2];
 assert.match(container ?? '', /^canvas-storage-test-[a-f0-9]{32}$/);
@@ -51,12 +52,14 @@ const pool = { async query(sql, values) {
       value = value.slice(1, -1) ? value.slice(1, -1).split(',') : [];
     }
     else if (['ciphertext', 'nonce', 'tag'].includes(name)) value = Buffer.from(value.slice(2), 'hex');
+    else if (name==='result') value=value===''?null:JSON.parse(value);
     return [name, value];
   }))) };
 } };
 const repository = createPostgresRepository(pool);
 await initialOAuthCustodyContract(pool);
 await initialOAuthLifecycleContract(pool);
+await oauthAttemptRecoveryContract(pool);
 await pool.query("INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled) VALUES ('adapter-org','adapter-platform','https://canvas.example.test',true)", []);
 assert.equal((await repository.getPlatform('adapter-org', 'adapter-platform')).configVersion, 1);
 assert.equal(await repository.getPlatform('foreign', 'adapter-platform'), null);
