@@ -36,6 +36,11 @@ remain deployment work. There are no replacement repository, vault, provider,
 HTTP-authentication or outbound-transport hooks. Platform/client-secret provisioning
 remains an owner/operator task.
 
+The separate [agent-file providers](FILE_CREDENTIALS.md) now provide concrete
+POSIX file acquisition for those two interfaces. The runtime itself still loads
+no files or environment credentials. Credential-agent renewal, provisioning and
+TLS rotation remain separate deployment work.
+
 Before listening, the runtime probes database adapter privileges and budget policy,
 then reads the current OpenBao envelope key and clears its probe buffer. It performs
 no DDL, grants, token exchange or authorization writes. Startup failures close the

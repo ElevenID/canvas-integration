@@ -112,3 +112,7 @@ Unsigned producer delivery uses the server-only `./observations` export and only
 The server-only `./observation-outbox` export supplies transactional sequence allocation, immutable original-byte retention and ordered leased delivery. See [Observation outbox](docs/OBSERVATION_OUTBOX.md) for recovery, parking and activation limits.
 
 The server-only `./rest-capture` worker reads scoped Canvas data into durable capture and outbox records. See [REST capture](docs/REST_CAPTURE.md) for configuration fences, honest timestamp provenance and activation limits.
+
+The [agent-file providers](docs/FILE_CREDENTIALS.md) acquire connector database
+passwords and OpenBao tokens from private rotating POSIX files without caches or
+ambient credential fallback. They do not provision agents or rotate TLS material.
