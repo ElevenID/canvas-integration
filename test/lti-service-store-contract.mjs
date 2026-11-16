@@ -86,14 +86,14 @@ export async function ltiServiceStoreContract(pool,{keyProvider,ownerQuery}) {
  await assert.rejects(lost('SELECT canvas_connector.publish_lti_service_token').publish(secondHandle),/lti_service_store_unavailable/);
  const original=await store.publish(secondHandle);assert.equal(original.tokenReference,reconciled.tokenReference);
  await ownerQuery(`CREATE FUNCTION canvas_connector.synthetic_service_deadline() RETURNS trigger LANGUAGE plpgsql AS $$
-  BEGIN NEW.prepare_expires_at:=clock_timestamp()+interval '1500 milliseconds';RETURN NEW;END;$$;
+  BEGIN NEW.prepare_expires_at:=clock_timestamp()+interval '1 second';RETURN NEW;END;$$;
   CREATE TRIGGER synthetic_service_deadline BEFORE INSERT ON canvas_connector.lti_service_attempts
    FOR EACH ROW EXECUTE FUNCTION canvas_connector.synthetic_service_deadline();`);
  let expiring;
  try {expiring=await store.prepare(command());}
  finally {await ownerQuery('DROP TRIGGER synthetic_service_deadline ON canvas_connector.lti_service_attempts;DROP FUNCTION canvas_connector.synthetic_service_deadline();');}
  await ownerQuery(`CREATE FUNCTION canvas_connector.synthetic_service_delay() RETURNS trigger LANGUAGE plpgsql AS $$
-  BEGIN IF NEW.phase='exchanging' THEN PERFORM pg_sleep(1.6);END IF;RETURN NEW;END;$$;
+  BEGIN IF NEW.phase='exchanging' THEN PERFORM pg_sleep(1.3);END IF;RETURN NEW;END;$$;
   CREATE TRIGGER zz_synthetic_service_delay BEFORE UPDATE ON canvas_connector.lti_service_attempts
    FOR EACH ROW EXECUTE FUNCTION canvas_connector.synthetic_service_delay();`);
  try {
