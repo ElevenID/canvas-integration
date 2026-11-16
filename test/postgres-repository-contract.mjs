@@ -278,3 +278,12 @@ for (const outcome of ['success', 'lost-commit-ack', 'provider-failure', 'config
   } finally { await fixture.close(); }
 }
 console.log('Durable refresh passed concrete HTTPS exchange, reusable refresh token, uncertain commit and configuration-change contracts');
+await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
+  VALUES ('refresh-preflight','platform','https://canvas.example.test',true) RETURNING id`, []);
+await repository.publishConnection({ ...connection, organizationId: 'refresh-preflight', platformId: 'platform',
+  tokenExpiresAt: Date.now()+60000 }, 1);
+const preflight = await repository.claimRefresh('refresh-preflight', 'platform');
+await pool.query("UPDATE canvas_connector.platforms SET enabled=false WHERE organization_id='refresh-preflight' RETURNING id", []);
+assert.equal(await repository.beginRefreshExchange(preflight.id, preflight.leaseId), false,
+  'disablement between claim and exchange must prevent provider work');
+console.log('Refresh revalidates current configuration before starting external exchange');

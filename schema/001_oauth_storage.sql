@@ -301,10 +301,25 @@ END;
 $$;
 
 CREATE FUNCTION canvas_connector.begin_refresh_exchange(job uuid, lease uuid)
-RETURNS boolean LANGUAGE sql AS $$
-    WITH changed AS (UPDATE canvas_connector.refresh_attempts SET phase='exchanging'
-      WHERE id=job AND lease_id=lease AND phase='claimed' AND lease_until > clock_timestamp() RETURNING id)
-    SELECT EXISTS(SELECT 1 FROM changed);
+RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE attempt canvas_connector.refresh_attempts; configuration canvas_connector.platforms;
+        connection canvas_connector.connections;
+BEGIN
+    SELECT * INTO attempt FROM canvas_connector.refresh_attempts WHERE id=job;
+    IF NOT FOUND THEN RETURN false; END IF;
+    SELECT * INTO configuration FROM canvas_connector.platforms
+      WHERE organization_id=attempt.organization_id AND id=attempt.platform_id FOR UPDATE;
+    IF NOT FOUND THEN RETURN false; END IF;
+    SELECT * INTO connection FROM canvas_connector.connections
+      WHERE organization_id=attempt.organization_id AND platform_id=attempt.platform_id FOR UPDATE;
+    IF NOT FOUND THEN RETURN false; END IF;
+    SELECT * INTO attempt FROM canvas_connector.refresh_attempts WHERE id=job FOR UPDATE;
+    IF attempt.lease_id <> lease OR attempt.phase <> 'claimed' OR attempt.lease_until <= clock_timestamp()
+       OR NOT configuration.enabled OR configuration.archived OR configuration.config_version <> attempt.config_version
+       OR connection.revision <> attempt.connection_revision OR connection.status <> 'connected' THEN RETURN false; END IF;
+    UPDATE canvas_connector.refresh_attempts SET phase='exchanging' WHERE id=job;
+    RETURN true;
+END;
 $$;
 CREATE FUNCTION canvas_connector.require_refresh_reconciliation(job uuid, lease uuid)
 RETURNS boolean LANGUAGE sql AS $$
