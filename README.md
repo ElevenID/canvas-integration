@@ -92,7 +92,7 @@ const platforms = await client.execute('listCanvasPlatforms');
 
 Management operations require explicitly replacing `allowedOperations` with
 reviewed operation names. Creates additionally require a caller-persisted
-`idempotencyKey` (16ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“128 safe characters), reused for the same logical request.
+`idempotencyKey` (16ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ128 safe characters), reused for the same logical request.
 There are **no automatic write retries**. A network failure can leave the result
 unknown: reconcile through a read before retrying. Header preservation is
 covered here; actual Gateway idempotency remains an integration acceptance gate.
@@ -107,3 +107,5 @@ Source provenance is in `NOTICE.md`; licensing is in `LICENSE`.
 The server-only `./postgres-pool` adapter supplies verified-TLS, bounded autocommit transport for the connector database. See [PostgreSQL driver](docs/POSTGRES_DRIVER.md) for explicit credential wiring, failure semantics and actual PostgreSQL/OpenBao/vault qualification.
 
 Unsigned producer delivery uses the server-only `./observations` export and only the public Common Gateway. See [Observation submission](docs/OBSERVATION_SUBMIT.md) for canonical durable bytes, exact API-key scope, idempotency and uncertain outcomes.
+
+The server-only `./observation-outbox` export supplies transactional sequence allocation, immutable original-byte retention and ordered leased delivery. See [Observation outbox](docs/OBSERVATION_OUTBOX.md) for recovery, parking and activation limits.

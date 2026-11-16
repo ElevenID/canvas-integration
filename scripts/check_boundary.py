@@ -22,6 +22,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/encrypted-vault.mjs': {'node:crypto'},
  'src/gateway-admin-auth.mjs': {'node:https'},
  'src/gateway-client.mjs': {'./operations.mjs', 'node:https'},
+ 'src/observation-outbox.mjs': {'./observation-submit.mjs'},
  'src/observation-submit.mjs': {'node:https'},
  'src/oauth-admin-http.mjs': {'./oauth-browser-binding.mjs'},
  'src/oauth-browser-binding.mjs': {'node:crypto'},
@@ -79,6 +80,7 @@ def audit(root: Path) -> list[str]:
      './configuration': './src/configuration.mjs',
      './encrypted-vault': './src/encrypted-vault.mjs',
      './gateway-admin-auth': './src/gateway-admin-auth.mjs',
+     './observation-outbox': './src/observation-outbox.mjs',
      './observations': './src/observation-submit.mjs',
      './oauth-admin-http': './src/oauth-admin-http.mjs',
      './oauth-browser-binding': './src/oauth-browser-binding.mjs',
@@ -119,6 +121,14 @@ def audit(root: Path) -> list[str]:
                       "publishConnection", "completionLocation"):
         if invariant not in lifecycle:
             errors.append("Canvas OAuth lifecycle invariant missing")
+    outbox = (root / "src/observation-outbox.mjs").read_text()
+    for invariant in ("canvas_connector.enqueue_observation", "canvas_connector.seal_observation", "bodyFor(item)",
+                      "item?.organizationId!==organizationId", "item.producerRef!==producerRef",
+                      "receipt=undefined", "submitter.submit(item.body)", "item.attempts>=maxAttempts"):
+        if invariant not in outbox:
+            errors.append("Observation outbox invariant missing")
+    if re.search(r"process\s*\.\s*env|X-API-Key|/v1/|/internal/|DELETE FROM", outbox):
+        errors.append("outbox transport/credential/retention violation")
     observation = (root / "src/observation-submit.mjs").read_text()
     for invariant in ("new URL('/v1/evidence/observations',origin)", "method:'POST'", "agent:false",
                       "rejectUnauthorized:true", "minVersion:'TLSv1.2'", "apiKeyProvider.getApiKey",

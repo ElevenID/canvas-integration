@@ -26,7 +26,7 @@ jobs:
       - name: Test isolated connector storage and concurrent state consumption
         run: python3 scripts/test_postgres_storage.py
   driver:
-    name: Connector PostgreSQL TLS driver and OpenBao vault
+    name: Connector PostgreSQL TLS, vault and observation outbox
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -38,7 +38,7 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - run: npm ci --ignore-scripts --omit=optional --no-audit --no-fund
-      - name: Test real TLS database, readonly keys, encrypted vault and denial
+      - name: Test real TLS database, keys, vault, durable delivery and denial
         run: python3 scripts/test_postgres_pool.py
   key-custody:
     name: Connector OpenBao key provider contract
