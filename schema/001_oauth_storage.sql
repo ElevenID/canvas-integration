@@ -28,6 +28,24 @@ $$;
 CREATE TRIGGER platform_configuration_revision BEFORE UPDATE ON canvas_connector.platforms
     FOR EACH ROW EXECUTE FUNCTION canvas_connector.bump_platform_configuration();
 
+-- Encryption keys live outside PostgreSQL. These rows contain only authenticated
+-- ciphertext plus tenant/platform/provider/purpose metadata and a key version.
+CREATE TABLE canvas_connector.secrets (
+    organization_id text NOT NULL,
+    reference text NOT NULL CHECK (reference ~ '^[a-f0-9-]{36}$'),
+    platform_id text NOT NULL,
+    provider text NOT NULL CHECK (provider = 'canvas'),
+    purpose text NOT NULL CHECK (purpose IN ('oauth_client_secret','oauth_access_token','oauth_refresh_token')),
+    key_id text NOT NULL CHECK (key_id ~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'),
+    ciphertext bytea NOT NULL CHECK (octet_length(ciphertext) BETWEEN 1 AND 16384),
+    nonce bytea NOT NULL CHECK (octet_length(nonce) = 12),
+    tag bytea NOT NULL CHECK (octet_length(tag) = 16),
+    enabled boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (organization_id, reference),
+    FOREIGN KEY (organization_id, platform_id) REFERENCES canvas_connector.platforms(organization_id,id)
+);
+
 CREATE TABLE canvas_connector.authorizations (
     state_hash text PRIMARY KEY CHECK (state_hash ~ '^[a-f0-9]{64}$'),
     organization_id text NOT NULL,

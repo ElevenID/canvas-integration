@@ -39,6 +39,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/postgres-repository.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./encrypted-vault": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/encrypted-vault.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {

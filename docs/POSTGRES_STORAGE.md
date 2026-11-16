@@ -7,7 +7,8 @@ application authority and issuance decisions remain behind the public Gateway.
 
 The schema stores platform configuration, hashed OAuth authorization state,
 opaque vault references, connection metadata and durable revocation jobs.
-It stores neither Canvas tokens/client secrets nor ElevenID API-key secrets.
+The secrets table stores only authenticated encrypted Canvas tokens/client secrets;
+plaintext encryption keys and ElevenID API-key secrets never belong in this database.
 Canvas origin canonicalization, scope/capability allowlists and secret-reference
 metadata validation remain required in the existing service layer.
 
@@ -75,5 +76,6 @@ incrementing platform configuration versions. Repository integration contracts
 execute the actual parameterized statements through a test-only psql bridge;
 that bridge is not a production driver or transport implementation.
 
-Encrypted vault, administrative operations, driver/deployment wiring,
+The encrypted vault adapter is documented in ENCRYPTED_VAULT.md. External key-provider
+wiring, administrative operations, driver/deployment wiring,
 refresh/revocation workers and deployed acceptance tests remain required.

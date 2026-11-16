@@ -5,10 +5,11 @@ import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { createPostgresRepository } from '../src/postgres-repository.mjs';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
+import { createEncryptedVault } from '../src/encrypted-vault.mjs';
 
 const container = process.argv[2];
 assert.match(container ?? '', /^canvas-storage-test-[a-f0-9]{32}$/);
-const literal = value => value === null ? 'NULL' : Array.isArray(value)
+const literal = value => value === null ? 'NULL' : Buffer.isBuffer(value) ? `decode('${value.toString('hex')}','hex')` : Array.isArray(value)
   ? `ARRAY[${value.map(literal).join(',')}]::text[]`
   : typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
 function csv(source) {
@@ -39,6 +40,7 @@ const pool = { async query(sql, values) {
       assert.match(value, /^\{[^{}"\\]*\}$/);
       value = value.slice(1, -1) ? value.slice(1, -1).split(',') : [];
     }
+    else if (['ciphertext', 'nonce', 'tag'].includes(name)) value = Buffer.from(value.slice(2), 'hex');
     return [name, value];
   }))) };
 } };
@@ -119,3 +121,48 @@ for (const uncertainCommit of [false, true]) {
   assert.equal(exchanges, 1);
 }
 console.log('OAuth lifecycle + PostgreSQL passed fresh authorization, replay and lost-commit-acknowledgment contracts');
+
+// Real encrypted vault persistence with a synthetic external key provider.
+const key = Buffer.alloc(32, 17);
+const keys = new Map([['test-key-v1', key], ['test-key-v2', Buffer.alloc(32, 23)]]);
+let currentKey = 'test-key-v1';
+const vault = createEncryptedVault({ pool, keyProvider: {
+  async current() { return { id: currentKey, key: keys.get(currentKey) }; },
+  async byId(id) { return keys.get(id); },
+} });
+const metadata = { platformId: 'adapter-platform', provider: 'canvas', purpose: 'oauth_client_secret' };
+const secret = 'synthetic-private-client-secret';
+const reference = await vault.put('adapter-org', metadata, secret);
+assert.equal(await vault.get('adapter-org', reference), secret);
+currentKey = 'test-key-v2';
+assert.equal(await vault.rotate('adapter-org', reference), true);
+assert.equal(await vault.get('adapter-org', reference), secret);
+assert.equal((await pool.query('SELECT key_id FROM canvas_connector.secrets WHERE reference=$1', [reference])).rows[0].key_id, 'test-key-v2');
+keys.delete('test-key-v1');
+assert.equal(await vault.get('adapter-org', reference), secret, 'rotation must survive retirement of the old key');
+const unavailableVault = createEncryptedVault({ pool, keyProvider: {
+  async current() { throw Error('private key provider detail'); }, async byId() { return null; },
+} });
+await assert.rejects(unavailableVault.get('adapter-org', reference), /^Error: connector_vault_unavailable$/);
+await assert.rejects(unavailableVault.put('adapter-org', metadata, secret), /^Error: connector_vault_unavailable$/);
+assert.equal((await vault.metadata('adapter-org', reference)).purpose, 'oauth_client_secret');
+assert.equal(await vault.metadata('foreign-org', reference), null);
+await assert.rejects(vault.get('foreign-org', reference), /connector_vault_unavailable/);
+const encrypted = (await pool.query('SELECT ciphertext,nonce,tag FROM canvas_connector.secrets WHERE reference=$1', [reference])).rows[0];
+assert.equal(encrypted.ciphertext.includes(Buffer.from(secret)), false);
+const other = await vault.put('adapter-org', metadata, secret);
+const otherEncrypted = (await pool.query('SELECT ciphertext,nonce,tag FROM canvas_connector.secrets WHERE reference=$1', [other])).rows[0];
+assert.notDeepEqual(encrypted.nonce, otherEncrypted.nonce);
+assert.notDeepEqual(encrypted.ciphertext, otherEncrypted.ciphertext);
+await pool.query("UPDATE canvas_connector.secrets SET purpose='oauth_access_token' WHERE reference=$1 RETURNING reference", [reference]);
+await assert.rejects(vault.get('adapter-org', reference), /connector_vault_unavailable/);
+await pool.query("UPDATE canvas_connector.secrets SET purpose='oauth_client_secret',ciphertext=$2 WHERE reference=$1 RETURNING reference", [reference, otherEncrypted.ciphertext]);
+await assert.rejects(vault.get('adapter-org', reference), /connector_vault_unavailable/);
+await pool.query('UPDATE canvas_connector.secrets SET enabled=false WHERE reference=$1 RETURNING reference', [other]);
+await assert.rejects(vault.get('adapter-org', other), /connector_vault_unavailable/);
+await vault.delete('foreign-org', other);
+assert.notEqual(await vault.metadata('adapter-org', other), null);
+await vault.delete('adapter-org', other);
+assert.equal(await vault.metadata('adapter-org', other), null);
+assert.deepEqual(key, Buffer.alloc(32, 17), 'vault must not mutate provider-owned key buffers');
+console.log('Encrypted PostgreSQL vault passed roundtrip, ciphertext isolation, tenant isolation, tamper and disablement contracts');
