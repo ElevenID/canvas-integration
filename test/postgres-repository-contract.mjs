@@ -7,6 +7,8 @@ import { createPostgresRepository } from '../src/postgres-repository.mjs';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
 import { createEncryptedVault } from '../src/encrypted-vault.mjs';
 import { createRevocationWorker } from '../src/revocation-worker.mjs';
+import { createCanvasOAuthProvider } from '../src/canvas-oauth-provider.mjs';
+import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
 
 const container = process.argv[2];
 assert.match(container ?? '', /^canvas-storage-test-[a-f0-9]{32}$/);
@@ -196,3 +198,28 @@ assert.equal(providerCalls, 1, 'durable confirmation must resume cleanup without
 assert.equal(await vault.metadata('worker-org', refreshRef), null);
 assert.equal(await worker.runOnce(), 'idle');
 console.log('Durable revocation worker passed provider confirmation, partial cleanup recovery and completion contracts');
+
+const https = await httpsFixture();
+try {
+  https.setHandler((req, res) => {
+    assert.equal(req.method, 'DELETE'); assert.equal(req.url, '/login/oauth2/token');
+    assert.equal(req.headers.authorization, 'Bearer synthetic-https-access');
+    assert.equal(req.headers['x-api-key'], undefined);
+    json(res, {});
+  });
+  await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
+    VALUES ('http-worker-org','platform',$1,true) RETURNING id`, [https.origin]);
+  const access = await vault.put('http-worker-org', { platformId: 'platform', provider: 'canvas', purpose: 'oauth_access_token' }, 'synthetic-https-access');
+  const refresh = await vault.put('http-worker-org', { platformId: 'platform', provider: 'canvas', purpose: 'oauth_refresh_token' }, 'synthetic-https-refresh');
+  assert.equal(await repository.publishConnection({ ...connection, organizationId: 'http-worker-org', platformId: 'platform',
+    canvasOrigin: https.origin, accessTokenRef: access, refreshTokenRef: refresh }, 1), true);
+  assert.equal(await repository.disconnect('http-worker-org', 'platform'), true);
+  const concreteWorker = createRevocationWorker({ repository, secretVault: vault,
+    provider: createCanvasOAuthProvider({ allowedPrivateAddresses: ['127.0.0.1', '::1'], ca: https.ca }) });
+  assert.equal(await concreteWorker.runOnce(), 'completed');
+  assert.equal(https.seen.length, 1);
+  assert.equal(await vault.metadata('http-worker-org', access), null);
+  assert.equal(await vault.metadata('http-worker-org', refresh), null);
+  assert.equal(await concreteWorker.runOnce(), 'idle');
+} finally { await https.close(); }
+console.log('PostgreSQL + encrypted vault + concrete pinned HTTPS revocation passed');
