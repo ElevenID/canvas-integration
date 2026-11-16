@@ -68,6 +68,10 @@ test('nonempty roles require a standard principal or sub-role; custom extras car
   }
   body[C + 'roles'] = ['http://purl.imsglobal.org/vocab/lis/v2/membership#Invented'];
   denied(input({ token: token(body) }));
+  body[C + 'roles'] = ['http://purl.imsglobal.org/vocab/lti/system/person#TestUser'];
+  denied(input({ token: token(body) }));
+  body[C + 'roles'].push('http://purl.imsglobal.org/vocab/lis/v2/membership#Learner');
+  validateCanvasResourceLinkLaunch(input({ token: token(body) }));
 });
 const claimMutations = {
   issuer: body => { body.iss += '/'; }, audience: body => { body.aud = 'other'; },

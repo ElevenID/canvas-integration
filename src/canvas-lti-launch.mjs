@@ -11,7 +11,6 @@ for (const [path, names] of Object.entries({
   'lis/v2/system/person': 'Administrator None AccountAdmin Creator SysAdmin SysSupport User',
   'lis/v2/institution/person': 'Administrator Faculty Guest None Other Staff Student Alumni Instructor Learner Member Mentor Observer ProspectiveStudent',
   'lis/v2/membership': 'Administrator ContentDeveloper Instructor Learner Mentor Manager Member Officer',
-  'lti/system/person': 'TestUser',
   'lis/v2/membership/Administrator': 'Administrator Developer ExternalDeveloper ExternalSupport ExternalSystemAdministrator Support SystemAdministrator',
   'lis/v2/membership/ContentDeveloper': 'ContentDeveloper ContentExpert ExternalContentExpert Librarian',
   'lis/v2/membership/Instructor': 'ExternalInstructor Grader GuestInstructor Lecturer PrimaryInstructor SecondaryInstructor TeachingAssistant TeachingAssistantGroup TeachingAssistantOffering TeachingAssistantSection TeachingAssistantSectionAssociation TeachingAssistantTemplate',
