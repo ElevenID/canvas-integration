@@ -39,6 +39,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/oauth-admin-http.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./gateway-admin-auth": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/gateway-admin-auth.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {

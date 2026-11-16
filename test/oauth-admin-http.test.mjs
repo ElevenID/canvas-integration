@@ -3,6 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
 import { createOAuthAdminHandler } from '../src/oauth-admin-http.mjs';
+import { createGatewayAdminAuthenticator } from '../src/gateway-admin-auth.mjs';
+import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
 
 const origin = 'https://connector.example.test';
 const form = 'client_id=client&client_secret_ref=opaque-ref&capabilities=catalog';
@@ -67,4 +69,24 @@ test('admin provider failures redact details and fail closed', async t => {
   assert.equal((await denied.send()).status, 429);
   const lifecycle = await fixture(t, { lifecycle: { start: async () => { throw Error('secret'); } } });
   assert.deepEqual(JSON.parse((await lifecycle.send()).body), { error: 'authorization_start_failed' });
+});
+
+test('admin HTTP uses the concrete public Gateway session/permission authenticator', async t => {
+  const gateway = await httpsFixture();
+  try {
+    const organizationId = '20000000-0000-4000-8000-000000000001';
+    let permissions = ['integration-connector:edit'];
+    gateway.setHandler((req, res) => json(res, req.url === '/v1/auth/me'
+      ? { authenticated: true, user: { user_id: 'user', organization_id: organizationId } } : { permissions }));
+    const f = await fixture(t, { authenticateAndAuthorize: createGatewayAdminAuthenticator({
+      gatewayOrigin: gateway.origin, adminOrigin: origin, sessionCookieName: 'session', ca: gateway.ca,
+    }) });
+    const headers = { Cookie: 'session=synthetic-session-token', 'X-Organization-ID': 'spoofed' };
+    assert.equal((await f.send(form, headers)).status, 200);
+    assert.equal(f.calls[0].organizationId, organizationId);
+    permissions = [];
+    assert.equal((await f.send(form, headers)).status, 403);
+    assert.equal(f.calls.length, 1, 'revoked permission must stop the next lifecycle start');
+    assert.equal(gateway.seen.length, 4);
+  } finally { await gateway.close(); }
 });
