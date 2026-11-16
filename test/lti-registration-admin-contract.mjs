@@ -69,7 +69,10 @@ try {
   assert.ok(gateway.seen.every(item=>item.headers.cookie==='session=synthetic-admin-session-credential' && item.headers['x-api-key']===undefined && item.headers['x-organization-id']===undefined));
   const activateFields={operation_id:randomUUID(),expected_platform_version:'1',expected_registration_version:'1'};
   const activations=await Promise.all(Array.from({length:8},()=>send(prefix+'/activate',activateFields)));
-  const active=activations[0];assert.ok(activations.every(value=>value.status===200 && JSON.stringify(value.body)===JSON.stringify(active.body)));
+  const active=activations[0];
+  for(const [index,value] of activations.entries()) {
+    assert.equal(value.status,200,`concurrent exact activation${index}`);assert.deepEqual(value.body,active.body);
+  }
   assert.equal(active.body.receipt.version,2);assert.equal(active.body.receipt.enabled,true);
   assert.equal(await sql(`SELECT count(*) FROM canvas_connector.lti_registration_operation_audit WHERE operation_id='${activateFields.operation_id}';`),'1');
   const replay=await send(prefix+'/activate',activateFields);assert.deepEqual(replay.body,active.body);
