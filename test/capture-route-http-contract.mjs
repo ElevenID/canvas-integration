@@ -66,7 +66,7 @@ export async function captureRouteHttpContract({send,address,organizationId,canv
   bindings.set(concurrent.binding_id,{...record,id:concurrent.binding_id});
   const requests=await Promise.all(Array.from({length:8},()=>send(address,{path:'/platforms/managed-platform/capture-routes/concurrent/create',body:new URLSearchParams(concurrent).toString()}).response));
   for(const [index,response] of requests.entries()) {
-    assert.equal(response.status,200,`concurrent capture create${index}; statuses=${requests.map(value=>value.status).join(',')}`);
+    assert.equal(response.status,200,`concurrent capture create${index}; statuses=${requests.map(value=>value.status).join(',')}; types=${requests.map(value=>value.headers['content-type']??'none').join(',')}`);
     assert.deepEqual(JSON.parse(response.body),JSON.parse(requests[0].body));
   }
   assert.equal((await query('SELECT count(*)::integer AS n FROM canvas_connector.rest_route_operation_audit WHERE organization_id=$1 AND operation_id=$2',[organizationId,concurrent.operation_id])).rows[0].n,1);
