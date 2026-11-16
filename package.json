@@ -94,6 +94,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/observation-outbox.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./rest-capture": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/rest-capture.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {

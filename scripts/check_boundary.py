@@ -31,6 +31,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/operations.mjs': set(),
  'src/postgres-pool.mjs': {'pg/lib/client.js', 'pg-pool'},
  'src/postgres-repository.mjs': set(),
+ 'src/rest-capture.mjs': {'./canvas-rest-reader.mjs', './canvas-rest-contract.mjs', './canvas-rest-network.mjs', './observation-submit.mjs'},
  'src/refresh-worker.mjs': set(),
  'src/revocation-worker.mjs': set()}
 IMPORT = re.compile(r"^import\s+[^;]+?\s+from\s+['\"]([^'\"]+)['\"];", re.MULTILINE)
@@ -88,6 +89,7 @@ def audit(root: Path) -> list[str]:
      './openbao-key-provider': './src/openbao-key-provider.mjs',
      './postgres-pool': './src/postgres-pool.mjs',
      './postgres-repository': './src/postgres-repository.mjs',
+     './rest-capture': './src/rest-capture.mjs',
      './refresh-worker': './src/refresh-worker.mjs',
      './revocation-worker': './src/revocation-worker.mjs'}
     if set(package.get("exports", {})) != set(expected):
@@ -121,6 +123,15 @@ def audit(root: Path) -> list[str]:
                       "publishConnection", "completionLocation"):
         if invariant not in lifecycle:
             errors.append("Canvas OAuth lifecycle invariant missing")
+    capture = (root / "src/rest-capture.mjs").read_text()
+    for invariant in ("canvas_connector.schedule_rest_capture", "canvas_connector.complete_rest_capture",
+                      "job?.organizationId!==organizationId", "job.producerRef!==producerRef",
+                      "purpose:'oauth_access_token'", "effective_time_source=source", "createCanvasRestReader",
+                      "job.effective_time_policy!=='as_of_read'", "job.attempts>=maxAttempts"):
+        if invariant not in capture:
+            errors.append("REST capture invariant missing")
+    if re.search(r"process\s*\.\s*env|X-API-Key|getApiKey|/internal/|VERIFIED|DELETE FROM", capture):
+        errors.append("unreviewed REST capture credential/authority/retention")
     outbox = (root / "src/observation-outbox.mjs").read_text()
     for invariant in ("canvas_connector.enqueue_observation", "canvas_connector.seal_observation", "bodyFor(item)",
                       "item?.organizationId!==organizationId", "item.producerRef!==producerRef",
