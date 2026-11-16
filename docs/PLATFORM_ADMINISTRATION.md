@@ -54,7 +54,7 @@ pagination is an ordinary metadata snapshot, not an authority token; concurrent
 changes may require a fresh query. Origins, versions and flags contain no token,
 client secret, encrypted reference or raw provider response.
 
-Install owner migrations001–009. The HTTP role additionally needs platform INSERT,
+Install owner migrations001–010. The HTTP role additionally needs platform INSERT,
 UPDATE only on enabled/archived, SELECT/INSERT on platform_operation_audit and
 EXECUTE on administer_platform. It gains no origin/ID UPDATE or platform DELETE
 right. Existing platform revision and new audit-immutability guards must be enabled;
@@ -65,7 +65,8 @@ ownership, membership, schema provenance or deployment/network isolation.
 The tests exercise concurrent create and retry, version races, tenant pagination,
 provider-work gates, audit rollback, immutable history and unknown acknowledgments,
 plus Gateway authorization through the concrete HTTPS listener/constrained role.
-Credential provisioning and the operator UI remain separate work; the existing
-OAuth start still requires an already provisioned, scoped client-secret reference.
+The [client provisioning API](OAUTH_CLIENT_PROVISIONING.md) installs encrypted
+credentials and current client configuration. Production OAuth start loads that
+configuration; the operator UI remains separate work.
 Production deployment and the complete deployed Core Gateway-to-wallet flow
 remain unqualified.

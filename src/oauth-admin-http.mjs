@@ -58,14 +58,14 @@ export function createOAuthAdminHandler({ lifecycle, authenticateAndAuthorize, r
           || Object.hasOwn(fields, key) || !value) return finish(400);
       fields[key] = value;
     }
-    if (!fields.client_id || !fields.client_secret_ref || !fields.capabilities) return finish(400);
+    if (!fields.capabilities || Boolean(fields.client_id)!==Boolean(fields.client_secret_ref)) return finish(400);
     const capabilities = fields.capabilities.split(',');
     if (capabilities.length > 32 || new Set(capabilities).size !== capabilities.length
         || capabilities.some(value => !/^[A-Za-z0-9_.-]{1,128}$/.test(value))) return finish(400);
     try {
       const browserBinding=createOAuthBrowserBinding();
       const result = await lifecycle.start({ browserBinding, organizationId: identity.organizationId, platformId: path[1],
-        clientId: fields.client_id, clientSecretRef: fields.client_secret_ref, capabilities });
+        ...(fields.client_id?{clientId:fields.client_id,clientSecretRef:fields.client_secret_ref}:{}),capabilities });
       // Proof must return to this exact connector origin/path. No substituted
       // callback or ambiguous state may receive a browser binding cookie.
       const authorization=new URL(result.authorizationUrl);

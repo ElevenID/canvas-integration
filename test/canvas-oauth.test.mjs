@@ -480,3 +480,19 @@ test('authenticated start HTTP sets browser proof that completes its callback',a
   assert.equal(completed.location.searchParams.get('outcome'),'connected');
   assert.equal(f.connections.size,1);
 });
+test('production configured-client mode requires current metadata and rejects caller substitution',async()=>{
+  const f=fixture();let configured=true;
+  f.repository.configuredClient=async(org,platform,version)=>{
+    assert.equal(org,ORG);assert.equal(platform,PLATFORM);assert.equal(version,7);
+    return configured?{clientId:'configured-client',clientSecretRef:CLIENT_SECRET_REF}:null;
+  };
+  const strict=createCanvasOAuthLifecycle({publicOrigin:'https://connector.example.test',completionUrl:'https://console.example.test/complete',
+    repository:f.repository,secretVault:f.vault,provider:f.provider,requireConfiguredClient:true});
+  const input={organizationId:ORG,platformId:PLATFORM,browserBinding:BROWSER_BINDING,capabilities:['catalog']};
+  await strict.start(input);
+  const saved=[...f.authorizations.values()][0];assert.equal(saved.clientId,'configured-client');assert.equal(saved.clientSecretRef,CLIENT_SECRET_REF);
+  await assert.rejects(strict.start({...input,clientId:'substituted',clientSecretRef:CLIENT_SECRET_REF}),error=>error.code==='client_configuration_changed');
+  configured=false;
+  await assert.rejects(strict.start(input),error=>error.code==='client_configuration_required');
+  assert.equal(f.authorizations.size,1);assert.equal(f.calls.some(call=>call[0]==='exchange'),false);
+});

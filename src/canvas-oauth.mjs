@@ -115,7 +115,7 @@ function validateTokenBundle(bundle) {
 
 export function createCanvasOAuthLifecycle(configuration) {
   if (!isRecord(configuration) || Object.keys(configuration).some(key => ![
-    'publicOrigin', 'completionUrl', 'repository', 'secretVault', 'provider', 'clock', 'randomBytes',
+    'publicOrigin', 'completionUrl', 'repository', 'secretVault', 'provider', 'clock', 'randomBytes','requireConfiguredClient',
   ].includes(key))) fail('invalid_configuration');
   if (typeof globalThis.window !== 'undefined') fail('server_only');
   const publicOrigin = canvasOrigin(configuration.publicOrigin);
@@ -128,6 +128,8 @@ export function createCanvasOAuthLifecycle(configuration) {
   requireMethods(configuration.secretVault, ['metadata', 'get', 'stageAuthorizationResult'], 'invalid_secret_vault');
   requireMethods(configuration.provider, ['exchange'], 'invalid_provider');
   const repository = configuration.repository;
+  if(configuration.requireConfiguredClient!==undefined && typeof configuration.requireConfiguredClient!=='boolean') fail('invalid_configuration');
+  if(configuration.requireConfiguredClient===true) requireMethods(repository,['configuredClient'],'invalid_repository');
   const vault = configuration.secretVault;
   const provider = configuration.provider;
   const clock = configuration.clock ?? Date.now;
@@ -157,9 +159,16 @@ export function createCanvasOAuthLifecycle(configuration) {
       const origin = canvasOrigin(platform.canvasOrigin);
       if (!Number.isSafeInteger(platform.configVersion) || platform.configVersion < 1) fail('invalid_platform_config');
       if (await repository.connection(organizationId, platformId)) fail('connection_exists');
-      if (!safeText(input.clientId, 512) || input.clientId.trim() !== input.clientId) fail('invalid_client_id');
-      if (!safeText(input.clientSecretRef, 256)) fail('invalid_client_secret_reference');
-      const metadata = await vault.metadata(organizationId, input.clientSecretRef);
+      const configured=configuration.requireConfiguredClient===true
+        ?await repository.configuredClient(organizationId,platformId,platform.configVersion):null;
+      if(configuration.requireConfiguredClient===true && !configured) fail('client_configuration_required');
+      const clientId=configured?configured.clientId:input.clientId;
+      const clientSecretRef=configured?configured.clientSecretRef:input.clientSecretRef;
+      if(configured && ((input.clientId!==undefined && input.clientId!==clientId)
+        || (input.clientSecretRef!==undefined && input.clientSecretRef!==clientSecretRef))) fail('client_configuration_changed');
+      if (!safeText(clientId, 512) || clientId.trim() !== clientId) fail('invalid_client_id');
+      if (!safeText(clientSecretRef, 256)) fail('invalid_client_secret_reference');
+      const metadata = await vault.metadata(organizationId, clientSecretRef);
       if (!isRecord(metadata) || metadata.organizationId !== organizationId || metadata.platformId !== platformId || metadata.enabled !== true
           || metadata.provider !== 'canvas' || metadata.purpose !== 'oauth_client_secret') fail('client_secret_unavailable');
       const capabilities = normalizeCapabilities(input.capabilities);
@@ -175,8 +184,8 @@ export function createCanvasOAuthLifecycle(configuration) {
         platformId,
         canvasOrigin: origin,
         platformConfigVersion: platform.configVersion,
-        clientId: input.clientId,
-        clientSecretRef: input.clientSecretRef,
+        clientId,
+        clientSecretRef,
         stateHash: stateHash(state),
         browserBindingHash,
         capabilities,
@@ -185,7 +194,7 @@ export function createCanvasOAuthLifecycle(configuration) {
         expiresAt: now + AUTHORIZATION_TTL_MS,
         createdAt: now,
       });
-      const url = authorizationUrl(origin, input.clientId, redirectUri, state, scopes);
+      const url = authorizationUrl(origin, clientId, redirectUri, state, scopes);
       const saved = await repository.saveAuthorization(authorization);
       if (saved !== true) fail('authorization_store_conflict');
       const patched = await repository.markAuthorizationPending(

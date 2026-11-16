@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, timingSafeEqual, randomBytes, randomUUID } from 'node:crypto';
+import {clientProvisioningInput,clientProvisioningReceipt,clientSecret} from './oauth-client-contract.mjs';
 
 const fail = () => { throw new Error('connector_vault_unavailable'); };
 const id = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
@@ -10,6 +11,15 @@ function context(org, row) {
 function keyCopy(value) {
   if (!Buffer.isBuffer(value) || value.length !== 32) fail();
   return Buffer.from(value);
+}
+function clientDigest(material,input,plaintext) {
+  const key=keyCopy(material);let derived;
+  try {
+    derived=createHmac('sha256',key).update('canvas-oauth-client-receipt-key/v1').digest();
+    const prefix=JSON.stringify([1,'canvas-oauth-client-provisioning',input.organizationId,input.platformId,
+      input.operationId,input.actorId,input.expectedVersion,input.clientId])+'\n';
+    return createHmac('sha256',derived).update(prefix).update(plaintext).digest();
+  } finally {key.fill(0);derived?.fill(0);}
 }
 
 /** Connector-only encrypted custody. Keys come from an explicit external key
@@ -26,10 +36,10 @@ export function createEncryptedVault({ pool, keyProvider } = {}) {
     return (await execute(`SELECT reference,platform_id,provider,purpose,key_id,enabled,ciphertext,nonce,tag
       FROM canvas_connector.secrets WHERE organization_id=$1 AND reference=$2`, [org, reference])).rows[0] ?? null;
   };
-  const encrypt = async (org, row, value) => {
+  const encrypt = async (org, row, value, selectedKey) => {
     let key;
     try {
-      const selected = await keyProvider.current();
+      const selected = selectedKey??await keyProvider.current();
       if (!id(selected?.id)) fail();
       key = keyCopy(selected.key);
       row.key_id = selected.id;
@@ -59,6 +69,37 @@ export function createEncryptedVault({ pool, keyProvider } = {}) {
     if (row && (row.platform_id!==expected.platformId || row.provider!==expected.provider || row.purpose!==expected.purpose)) fail();
   };
   return Object.freeze({
+    async stageClientConfiguration(input,value) {
+      if(!clientProvisioningInput(input) || !clientSecret(value)) fail();
+      const plaintext=Buffer.from(value);let digest;
+      try {
+        const found=await execute(`SELECT platform_id,actor_id,client_id,expected_version::float8 AS "expectedVersion",
+          key_id,input_digest,receipt FROM canvas_connector.oauth_client_provisioning_audit
+          WHERE organization_id=$1 AND operation_id=$2`,[input.organizationId,input.operationId]);
+        if(found.rows.length>1) fail();
+        const prior=found.rows[0];
+        if(prior) {
+          if(prior.platform_id!==input.platformId || prior.actor_id!==input.actorId || prior.client_id!==input.clientId
+            || prior.expectedVersion!==input.expectedVersion) return null;
+          if(!id(prior.key_id) || !Buffer.isBuffer(prior.input_digest) || prior.input_digest.length!==32) fail();
+          digest=clientDigest(await keyProvider.byId(prior.key_id),input,plaintext);
+          if(!timingSafeEqual(digest,prior.input_digest)) return null;
+          if(!clientProvisioningReceipt(prior.receipt,input)) fail();
+          return Object.freeze(prior.receipt);
+        }
+        const selected=await keyProvider.current();
+        const row={reference:randomUUID(),platform_id:input.platformId,provider:'canvas',purpose:'oauth_client_secret'};
+        digest=clientDigest(selected?.key,input,plaintext);
+        const sealed=await encrypt(input.organizationId,row,plaintext,selected);
+        const result=await execute('SELECT canvas_connector.provision_oauth_client($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) AS receipt',
+          [input.organizationId,input.platformId,input.operationId,input.actorId,input.expectedVersion,input.clientId,
+            row.reference,row.key_id,digest,sealed.ciphertext,sealed.nonce,sealed.tag]);
+        if(result.rows.length!==1 || !Object.hasOwn(result.rows[0],'receipt')) fail();
+        const receipt=result.rows[0].receipt;
+        if(receipt!==null && !clientProvisioningReceipt(receipt,input)) fail();
+        return receipt===null?null:Object.freeze(receipt);
+      } catch {fail();} finally {plaintext.fill(0);digest?.fill(0);}
+    },
     async metadata(org, reference) {
       const row = await load(org, reference);
       return row ? Object.freeze({ organizationId: org, platformId: row.platform_id,

@@ -137,6 +137,11 @@ tenant catalog, disabled creation and audited version-fenced enable/disable/arch
 workflow in the connector. Origin replacement and credential provisioning are not
 part of platform flag changes.
 
+The [OAuth client provisioning API](docs/OAUTH_CLIENT_PROVISIONING.md) atomically
+stores encrypted client credentials, current configuration and immutable operation
+receipts. Production OAuth start resolves that configuration, so callers can send
+capabilities without supplying client IDs or secret references.
+
 The separate [worker process](docs/WORKER_SERVICE.md) composes refresh, revocation,
 REST capture and public Gateway delivery with serialized polling, private-file
 credential interfaces and graceful drain. It uses its own connector database role.

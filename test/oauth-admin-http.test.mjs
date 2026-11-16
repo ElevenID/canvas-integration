@@ -49,6 +49,11 @@ test('admin start derives tenant from authenticated context and exposes only aut
   assert.match(response.headers['set-cookie'][0],/; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=600$/);
   assert.equal(response.body.includes(browserBinding),false);
 });
+test('configured OAuth start passes capabilities without caller-selected credentials',async t=>{
+  const f=await fixture(t);assert.equal((await f.send('capabilities=catalog')).status,200);
+  assert.equal(f.calls[0].clientId,undefined);assert.equal(f.calls[0].clientSecretRef,undefined);
+  assert.deepEqual(f.calls[0].capabilities,['catalog']);
+});
 for (const [identity, status] of [[null, 401], [{ authorized: false, organizationId: 'org' }, 403],
   [{ authorized: true }, 403]]) test(`admin authority rejection ${status}`, async t => {
   const f = await fixture(t, { authenticateAndAuthorize: async () => identity });
