@@ -72,15 +72,17 @@ table/function privileges.
 
 ## Constrained role and qualification
 
-The real contract's non-owner HTTP role has platform SELECT and `UPDATE(id)` for
-row locks; SELECT/INSERT/DELETE on secrets and authorizations;
-SELECT/INSERT/UPDATE on OAuth status and connections; SELECT on the budget and
-UPDATE only on its hits/window; and required function EXECUTE privileges.
-Preflight rejects the role without any platform update-column grant. The identity
-trigger rejects changing its ID. Platform definitions, deletion, unrelated refresh
-state and schema CREATE remain denied. A no-op ID update can still increment the
-platform revision. This is trusted connector code, not a public SQL interface;
-fixture grants do not approve production ownership, memberships or provisioning.
+The real contract's non-owner HTTP role now has platform SELECT/INSERT and UPDATE
+only on enabled/archived, with version-fenced administration and immutable receipts.
+It has SELECT/INSERT on secrets, SELECT/INSERT/DELETE on authorization state, and
+the selected status/connection/attempt privileges needed for publication and audited
+disconnect. It can read four refresh metadata columns, but cannot select refresh
+token references, delete secrets, complete revocation jobs, change platform origins
+or IDs, delete platforms or create schema objects. Audit tables are SELECT/INSERT
+only. The budget role can update only hits/window, not policy. Required function
+EXECUTE and enabled revision/identity/cleanup/audit guards are checked before
+listening. This is trusted connector code, not a public SQL interface; fixture
+grants do not approve production ownership, memberships or provisioning.
 
 `python3 scripts/test_postgres_pool.py` runs actual verified-TLS PostgreSQL,
 OpenBao, encrypted vault and HTTPS runtime with synthetic Canvas and

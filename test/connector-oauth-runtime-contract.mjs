@@ -209,6 +209,8 @@ try {
     GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_oauth_http;
     GRANT USAGE ON SCHEMA canvas_connector TO canvas_oauth_http;
     GRANT SELECT ON canvas_connector.platforms,canvas_connector.oauth_http_limit TO canvas_oauth_http;
+    GRANT INSERT ON canvas_connector.platforms TO canvas_oauth_http;
+    GRANT SELECT,INSERT ON canvas_connector.platform_operation_audit TO canvas_oauth_http;
     GRANT SELECT,INSERT ON canvas_connector.secrets TO canvas_oauth_http;
     GRANT SELECT,INSERT,DELETE ON canvas_connector.authorizations TO canvas_oauth_http;
     GRANT SELECT,INSERT,UPDATE ON canvas_connector.authorization_attempts TO canvas_oauth_http;
@@ -225,6 +227,7 @@ try {
       canvas_connector.publish_authorization_connection(text,text,text),
       canvas_connector.recover_authorization_attempt(text,text,text,bigint,uuid,text,text) TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION canvas_connector.disconnect_connection(text,text,uuid,bigint,uuid,text) TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION canvas_connector.administer_platform(text,text,uuid,text,text,text,bigint,boolean,boolean) TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION
       canvas_connector.stage_authorization_result(text,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamptz),
       canvas_connector.mark_authorization_pending(text,text,bigint,text),
@@ -234,9 +237,9 @@ try {
       : { getPassword: async () => 'synthetic-oauth-http-password' } };
   const missingLockPrivilege = await runtime({ database: httpDatabase });
   await assert.rejects(missingLockPrivilege.listen(), { message: 'connector_oauth_runtime_unavailable' });
-  // UPDATE(id) permits the required row locks. The immutable identity trigger
-  // prevents changing id, and no platform definition column is updateable.
-  owner('GRANT UPDATE(id) ON canvas_connector.platforms TO canvas_oauth_http;');
+  // Configuration administration updates only enabled/archive flags. These
+  // rights also permit row locks; origin and stable platform ID remain denied.
+  owner('GRANT UPDATE(enabled,archived) ON canvas_connector.platforms TO canvas_oauth_http;');
   const missingSecretLockPrivilege = await runtime({ database: httpDatabase });
   await assert.rejects(missingSecretLockPrivilege.listen(), { message: 'connector_oauth_runtime_unavailable' });
   owner('GRANT UPDATE(created_at) ON canvas_connector.secrets TO canvas_oauth_http;');
@@ -246,7 +249,8 @@ try {
     await assert.rejects(missingGuard.listen(), { message: 'connector_oauth_runtime_unavailable' });
   } finally { owner('ALTER TABLE canvas_connector.secrets ENABLE TRIGGER secret_creation_time;'); }
   for(const [table,trigger] of [['connections','connection_identity'],['authorization_attempts','authorization_cleanup'],
-    ['connection_operation_audit','connection_operation_audit_immutable']]) {
+    ['connection_operation_audit','connection_operation_audit_immutable'],['platforms','platform_configuration_revision'],
+    ['platform_operation_audit','platform_operation_audit_immutable']]) {
     owner(`ALTER TABLE canvas_connector.${table} DISABLE TRIGGER ${trigger};`);
     try {
       const missingGuard=await runtime({database:httpDatabase});
@@ -348,6 +352,27 @@ try {
     assert.equal(disconnected.body.includes(secret),false);
   assert.equal(await vault.get(org,connection.access_token_ref,{...scope,purpose:'oauth_access_token'}),ACCESS);
   console.log('Actual Gateway session/permission -> HTTPS restricted HTTP role connection inspect/disconnect/immutable receipt replay and deferred token cleanup passed');
+  const platformPath='/platforms/managed-platform/configuration/';
+  const createPlatformBody=new URLSearchParams({operation_id:randomUUID(),canvas_origin:canvas.origin}).toString();
+  permitted=false;
+  assert.equal((await send(secondAddress,{path:platformPath+'create',body:createPlatformBody}).response).status,403);
+  permitted=true;
+  const createdPlatform=await send(secondAddress,{path:platformPath+'create',body:createPlatformBody}).response;
+  assert.equal(createdPlatform.status,200);const platformReceipt=JSON.parse(createdPlatform.body).receipt;
+  assert.equal(platformReceipt.enabled,false);assert.equal(platformReceipt.configVersion,1);assert.equal(platformReceipt.actorId,'actor');
+  assert.deepEqual(JSON.parse((await send(secondAddress,{path:platformPath+'create',body:createPlatformBody}).response).body).receipt,platformReceipt);
+  const enableBody=new URLSearchParams({operation_id:randomUUID(),expected_version:'1',enabled:'true',archived:'false'}).toString();
+  const enabledPlatform=await send(secondAddress,{path:platformPath+'change',body:enableBody}).response;
+  assert.equal(enabledPlatform.status,200);assert.equal(JSON.parse(enabledPlatform.body).receipt.configVersion,2);
+  const staleBody=new URLSearchParams({operation_id:randomUUID(),expected_version:'1',enabled:'false',archived:'false'}).toString();
+  assert.equal((await send(secondAddress,{path:platformPath+'change',body:staleBody}).response).status,409);
+  const managed=JSON.parse((await send(secondAddress,{path:platformPath+'inspect',body:''}).response).body).platform;
+  assert.equal(managed.platformId,'managed-platform');assert.equal(managed.enabled,true);
+  const catalog=JSON.parse((await send(secondAddress,{path:'/platforms/catalog',body:''}).response).body);
+  assert.ok(catalog.platforms.some(row=>row.platformId==='managed-platform'));
+  const platformReceiptBody=new URLSearchParams({operation_id:platformReceipt.operationId}).toString();
+  assert.deepEqual(JSON.parse((await send(secondAddress,{path:platformPath+'receipt',body:platformReceiptBody}).response).body).receipt,platformReceipt);
+  console.log('Actual Gateway-authorized restricted-role HTTPS platform create/enable/catalog/inspect/CAS/immutable receipt replay passed');
   permitted = false;
   assert.equal((await send(secondAddress, { body: 'client_id=runtime-client' }).response).status, 403);
   const before = gateway.seen.length;
