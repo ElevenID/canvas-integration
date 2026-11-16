@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPublicKey, generateKeyPairSync, randomUUID, verify } from 'node:crypto';
+import { createServer } from 'node:https';
+import { createSecureContext } from 'node:tls';
 import { generateLtiToolKey, prepareLtiToolKey, signLtiClientAssertion } from '../src/lti-tool-assertion.mjs';
 import { createCanvasLtiServiceClient, ltiReadScopes } from '../src/canvas-lti-service-client.mjs';
 import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
@@ -123,5 +125,27 @@ test('pagination cannot send an expired credential or extend its lifetime by mut
   try {
     await assert.rejects(client.readResults({token,courseId:'11',lineItemId:'33',userId:'opaque:user'}),/expired_credential/);
     assert.equal(calls,1,'expired credentials never reach a second network send');
+  } finally {Date.now=realNow;}
+});
+
+test('verified TLS handshake expiry cannot flush either bearer headers or a client assertion body',async t=>{
+  const {peer,configuration}=await fixture(t),context=createSecureContext({key:peer.key,cert:peer.ca});
+  const realNow=Date.now;let clock=realNow(),expiry,handshakes=0,messages=0;
+  const sockets=new Set();
+  const server=createServer({key:peer.key,cert:peer.ca,SNICallback(_host,done){
+    handshakes++;clock=expiry+1;done(null,context);
+  }},(_req,res)=>{messages++;json(res,[]);});
+  server.on('connection',socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));});
+  const client=createCanvasLtiServiceClient({...configuration,canvasOrigin:`https://localhost:${server.address().port}`});
+  Date.now=()=>clock;
+  try {
+    const token=access();expiry=token.expiresAtMs;
+    await assert.rejects(client.readResults({token,courseId:'11',lineItemId:'33',userId:'opaque:user'}),/expired_credential/);
+    clock=realNow();const input=requestInput();expiry=input.expiresAt*1000;
+    await assert.rejects(client.requestAccessToken(input),/expired_credential/);
+    assert.equal(handshakes,2,'both credentials reached the real TLS negotiation');
+    assert.equal(messages,0,'no HTTP credential-bearing message was flushed');
   } finally {Date.now=realNow;}
 });

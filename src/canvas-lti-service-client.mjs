@@ -37,7 +37,10 @@ export function createCanvasLtiServiceClient(configuration) {
   }catch{fail('invalid_configuration');}
   const clientId=configuration.clientId;
   async function operation(work,validUntil) {
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
+    const expired=()=>validUntil!==undefined && Date.now()>=validUntil;
+    if(expired())fail('expired_credential');
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),
+      Math.max(1,Math.min(timeoutMs,validUntil===undefined?timeoutMs:validUntil-Date.now())));
     try {
       const pinned=await resolveAddress(origin,allowed,controller.signal);let used=0;
       const send=(path,{token,body,accept='application/json'}={})=>new Promise((resolve,reject)=>{
@@ -46,7 +49,7 @@ export function createCanvasLtiServiceClient(configuration) {
         try {
           // DNS and preceding pages may consume the remaining credential life.
           // Fence every actual send against the original immutable deadline.
-          if(validUntil!==undefined && Date.now()>=validUntil)fail('expired_credential');
+          if(expired())fail('expired_credential');
           const url=new URL(path,origin);if(url.origin!==origin||url.username||url.password||url.hash)fail('invalid_resource');
           req=request(url,{method:body===undefined?'GET':'POST',agent:false,rejectUnauthorized:true,minVersion:'TLSv1.2',maxHeaderSize:16384,
             family:pinned.family,autoSelectFamily:false,lookup:pinnedLookup(url.hostname.replace(/^\[|\]$/g,''),pinned),signal:controller.signal,
@@ -69,7 +72,17 @@ export function createCanvasLtiServiceClient(configuration) {
               catch{finish(new CanvasLtiServiceError('invalid_payload'));}
             });
           });
-          req.on('error',()=>finish(new CanvasLtiServiceError(controller.signal.aborted?'timeout':'transport_error')));req.end(body);
+          req.on('error',()=>finish(new CanvasLtiServiceError(expired()?'expired_credential':controller.signal.aborted?'timeout':'transport_error')));
+          // Do not queue a credential-bearing HTTP message until TLS identity
+          // verification completes. A stalled handshake must not flush a body
+          // or Authorization header after its original credential expires.
+          req.once('socket',socket=>socket.once('secureConnect',()=>{
+            if(settled)return;
+            if(expired())return finish(new CanvasLtiServiceError('expired_credential'));
+            if(controller.signal.aborted)return finish(new CanvasLtiServiceError('timeout'));
+            if(socket.authorized!==true)return finish(new CanvasLtiServiceError('transport_error'));
+            req.end(body);
+          }));
         }catch(error){finish(error instanceof CanvasLtiServiceError?error:new CanvasLtiServiceError('unavailable'));}
       });
       return await work(send);
