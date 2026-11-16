@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
+import PgClient from 'pg/lib/client.js';
 import {createConnectorPostgresPool} from '../src/postgres-pool.mjs';
 import {createPostgresRepository} from '../src/postgres-repository.mjs';
 import {createOpenBaoKeyProvider} from '../src/openbao-key-provider.mjs';
@@ -13,7 +14,7 @@ import {httpsFixture,json} from './support/canvas-https-fixture.mjs';
 const file=process.argv[2],container=process.argv[3];
 assert.match(file??'',/canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);assert.match(container??'',/^canvas-pg-driver-[a-f0-9]{32}$/);
 const f=JSON.parse(await readFile(file,'utf8'));const pool=createConnectorPostgresPool({host:'localhost',port:f.port,database:'canvas_driver_test',user:'canvas_runtime',ca:f.ca,
- credentialProvider:{getPassword:async()=> 'synthetic-driver-runtime'},maxConnections:16,queryTimeoutMs:2000,connectTimeoutMs:1000});
+ credentialProvider:{getPassword:async()=> 'synthetic-driver-runtime'},maxConnections:16,queryTimeoutMs:10000,connectTimeoutMs:1000});
 const keyProvider=createOpenBaoKeyProvider({openbaoOrigin:f.baoOrigin,mount:'connector-kv',keyPath:'canvas-envelope',keyNamespace:'canvas',ca:f.baoCa,tokenProvider:{getToken:async()=>f.baoToken}});
 const vault=createEncryptedVault({pool,keyProvider});const storage=createPostgresRepository(pool);const captures=createRestCaptureRepository(pool);
 const outbox=createObservationOutbox(pool);const canvas=await httpsFixture();const gateway=await httpsFixture();
@@ -106,5 +107,40 @@ try {
  for(const sql of ["UPDATE canvas_connector.rest_capture_jobs SET requirement='{}'::jsonb WHERE capture_id='negative-capture'",
   "DELETE FROM canvas_connector.rest_capture_jobs WHERE capture_id='negative-capture'"])
   await assert.rejects(()=>pool.query(sql),/connector_database_unavailable/);
+ // Controlled MVCC window: a real claimant reads pending eligibility and
+ // blocks on a platform lock. Install the coherent state of an intervening
+ // owner, use actual defer_rest_capture to schedule future backoff, then let
+ // the stale claimant reach its final job-row check.
+ await pool.query(`INSERT INTO canvas_connector.rest_capture_routes
+  (organization_id,id,producer_ref,platform_id,binding_id,binding_revision,requirement,claim_names,effective_time_policy,enabled)
+  VALUES ('capture-org','race-route','race-producer','capture-platform','binding-race',1,
+  '{"factType":"canvas.course_completion","courseId":"17","userId":"29"}'::jsonb,ARRAY['completed'],'as_of_read',true)`);
+ await captures.schedule('capture-org','race-producer','race-route','race-capture');
+ const ownerConfig={host:'localhost',port:f.port,database:'canvas_driver_test',user:'postgres',password:'synthetic-driver-bootstrap',
+  ssl:{ca:f.ca,rejectUnauthorized:true},application_name:'rest-capture-race-owner',connectionTimeoutMillis:1000,query_timeout:5000,statement_timeout:5000};
+ const control=new PgClient(ownerConfig),locker=new PgClient(ownerConfig);await control.connect();await locker.connect();
+ let stale;
+ try {
+  const lockerPid=(await locker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+  await locker.query('BEGIN');await locker.query("SELECT 1 FROM canvas_connector.platforms WHERE organization_id='capture-org' AND id='capture-platform' FOR UPDATE");
+  stale=captures.claim('capture-org','race-producer');stale.catch(()=>{});
+  let observed=false;
+  for(let n=0;n<100;n++) {
+   const waiting=await control.query(`SELECT pid FROM pg_stat_activity WHERE application_name='elevenid-canvas-connector' AND ${lockerPid}=ANY(pg_blocking_pids(pid))`);
+   if(waiting.rows.length){observed=true;break;}await new Promise(r=>setTimeout(r,10));
+  }
+  assert.equal(observed,true,'claim must be observed blocked after its initial eligibility read');
+  const intervening=(await control.query(`UPDATE canvas_connector.rest_capture_jobs j SET phase='leased',lease_id=gen_random_uuid(),
+   lease_expires_at=clock_timestamp()+interval '3 minutes',attempts=1,access_token_ref=c.access_token_ref,
+   connection_revision=c.revision,canvas_origin=c.canvas_origin,platform_config_version=c.platform_config_version,
+   capabilities=c.capabilities,scopes=c.scopes FROM canvas_connector.connections c
+   WHERE j.capture_id='race-capture' AND j.organization_id=c.organization_id AND j.platform_id=c.platform_id RETURNING j.lease_id`)).rows[0];
+  assert.equal(await captures.defer('capture-org','race-producer','race-capture',intervening.lease_id,'provider_unavailable',false),true);
+  assert.equal((await control.query("SELECT available_at>clock_timestamp() AS future FROM canvas_connector.rest_capture_jobs WHERE capture_id='race-capture'")).rows[0].future,true);
+  await locker.query('COMMIT');assert.equal(await stale,null);
+  const delayed=await job('race-capture');assert.equal(delayed.phase,'retry');assert.equal(delayed.attempts,1);
+  assert.equal(await captures.claim('capture-org','race-producer'),null);
+  console.log('Observed PostgreSQL lock wait plus intervening owner defer preserves future capture backoff');
+ }finally {await locker.query('ROLLBACK');await Promise.allSettled([stale].filter(Boolean));await locker.end();await control.end();}
  console.log('Real Canvas HTTPS -> scoped encrypted vault -> durable capture -> immutable outbox -> public Gateway HTTPS contracts passed; errors/uncertain commits/config and lease fences retained original state');
 }finally{await pool.close();await canvas.close();await gateway.close();}

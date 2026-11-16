@@ -44,7 +44,7 @@ Duplicate capture IDs reuse the existing job, not updated configuration. Capture
 IDs must be unique in the organization's observation namespace. Ordinals order
 captures per route. Claims are scoped to organization/producer and serialized
 behind earlier unfinished reads; completed/parked captures do not prevent a
-separate later capture intent. A fresh UUID three-minute lease fences each GET
+separate later capture intent. Eligibility, including retry availability, is rechecked after the final job lock so a stale pre-lock candidate cannot bypass newly scheduled backoff. A fresh UUID three-minute lease fences each GET
 attempt. GETs may be retried after lease expiry; token exchanges are not part of
 this worker.
 
@@ -108,7 +108,7 @@ scoped encrypted access tokens, actual Canvas HTTPS reads, durable capture,
 outbox preparation and public Gateway HTTPS submission. It checks true graded
 scores/denominators, incomplete false observations, explicit timestamp provenance,
 HTTP403/429/503 no-observation behavior, duplicate scheduling/concurrent lease
-claims, lost capture replies without re-read, disable/rotation fencing,
+claims, an observed lock-wait/intervening-owner stale-candidate backoff race, lost capture replies without re-read, disable/rotation fencing,
 delayed-write expiry rollback, source immutability and credential separation.
 The Gateway and Canvas endpoints use synthetic HTTPS fixtures; this is not live
 Canvas authorization, live core admission or OB3/wallet acceptance.

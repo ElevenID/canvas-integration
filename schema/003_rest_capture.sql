@@ -101,7 +101,8 @@ BEGIN
  SELECT * INTO configured FROM canvas_connector.rest_capture_routes WHERE organization_id=org AND id=candidate.route_id FOR SHARE;
  SELECT * INTO connection FROM canvas_connector.connections WHERE organization_id=org AND platform_id=candidate.platform_id FOR SHARE;
  SELECT * INTO item FROM canvas_connector.rest_capture_jobs WHERE organization_id=org AND capture_id=candidate.capture_id FOR UPDATE SKIP LOCKED;
- IF NOT FOUND OR NOT(item.phase IN ('pending','retry') OR (item.phase='leased' AND item.lease_expires_at<=clock_timestamp())) THEN RETURN; END IF;
+ IF NOT FOUND OR item.available_at>clock_timestamp()
+  OR NOT(item.phase IN ('pending','retry') OR (item.phase='leased' AND item.lease_expires_at<=clock_timestamp())) THEN RETURN; END IF;
  IF NOT COALESCE(configured.enabled AND configured.version=item.route_version AND platform.enabled AND NOT platform.archived
   AND connection.status='connected' AND connection.platform_config_version=platform.config_version AND connection.canvas_origin=platform.canvas_origin
   AND (connection.token_expires_at IS NULL OR connection.token_expires_at>clock_timestamp()),false) THEN
