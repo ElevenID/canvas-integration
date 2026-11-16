@@ -69,3 +69,9 @@ contracts remain separate evidence. Still required are production credential/TLS
 loading and rotation, a durable rate-limiter, full server/storage/provider
 composition, worker scheduling/shutdown, operator UI, deployed network policy and
 Canvas-to-Gateway-to-OB3-wallet qualification. No production activation is claimed.
+
+The [OAuth runtime](OAUTH_RUNTIME.md) now provides concrete adapter composition
+and a shared database budget. Its real-storage contract additionally tests actual
+token exchange, ciphertext publication after client disconnect and constrained-role
+startup. The raw service tests above retain their focused fixture scope; production
+credential agents, ingress controls, deployment and worker scheduling remain open.

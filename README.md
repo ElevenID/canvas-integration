@@ -29,13 +29,14 @@ bind callbacks to the initiating browser, a fixed connector URI and platform con
 and store client/access/refresh secrets only through an injected
 connector-owned vault adapter. See `docs/OAUTH_PROVIDER.md`.
 
-The server-only HTTPS service now mounts OAuth administration and callback
-handlers. Connector-owned PostgreSQL, encrypted vault and OpenBao adapters,
-durable observation delivery and REST capture have isolated contracts. See
+The server-only HTTPS service mounts OAuth administration and callback handlers.
+The [OAuth runtime](docs/OAUTH_RUNTIME.md) composes connector-owned PostgreSQL,
+encrypted vault, OpenBao, Canvas token exchange and Gateway session authentication.
+Durable delivery and REST capture have separate contracts. See
 [HTTPS service](docs/HTTPS_SERVICE.md) for listener configuration and shutdown.
 
 **Standalone deployment and extraction remain incomplete.** Production credential
-loading, rate-limiting, full server/storage/provider composition, worker scheduling,
+loading, deployment ingress controls, worker scheduling,
 LTI/AGS/NRPS and administration pages still need work. The compatibility Gateway
 client addresses existing Canvas APIs until their replacement is qualified.
 No deployment is cut over; the original Marty implementation remains for
