@@ -20,6 +20,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/canvas-lti-platform.mjs': {'node:https', './canvas-rest-network.mjs', './canvas-rest-contract.mjs', './canvas-lti-launch.mjs'},
  'src/capture-scheduler.mjs': {'node:crypto','./canvas-rest-contract.mjs'},
  'src/lti-tool-assertion.mjs': {'node:crypto','./canvas-rest-contract.mjs'},
+ 'src/lti-tool-key-store.mjs': {'node:crypto','./canvas-rest-contract.mjs','./lti-registration-contract.mjs','./lti-tool-assertion.mjs'},
  'src/canvas-lti-service-client.mjs': {'node:https','./canvas-rest-network.mjs','./canvas-rest-contract.mjs','./private-json.mjs','./lti-tool-assertion.mjs'},
  'src/lti-launch-repository.mjs': {'./canvas-rest-contract.mjs'},
  'src/lti-launch-lifecycle.mjs': {'node:crypto', './canvas-rest-contract.mjs', './canvas-rest-network.mjs', './canvas-lti-platform.mjs'},
