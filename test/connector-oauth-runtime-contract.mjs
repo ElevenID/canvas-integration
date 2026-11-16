@@ -18,6 +18,7 @@ import { createConnectorOAuthRuntime } from '../src/connector-oauth-runtime.mjs'
 import { createConnectorDatabasePasswordFile, createConnectorOpenBaoTokenFile } from '../src/file-credentials.mjs';
 import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
 import { captureRouteHttpContract } from './capture-route-http-contract.mjs';
+import { ltiRuntimeHttpContract } from './lti-runtime-http-contract.mjs';
 const file = process.argv[2], container = process.argv[3], baoContainer = process.argv[4];
 assert.match(file ?? '', /canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);
 assert.match(container ?? '', /^canvas-pg-driver-[a-f0-9]{32}$/);
@@ -51,7 +52,7 @@ const pool = createConnectorPostgresPool(database);
 const vault = createEncryptedVault({ pool, keyProvider: createOpenBaoKeyProvider(keyCustody) });
 const owner = sql => execFileSync('docker', ['exec', '-i', container, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1',
   '-U', 'postgres', '-d', 'canvas_driver_test'], { input: sql, stdio: ['pipe', 'pipe', 'pipe'] });
-const canvas = await httpsFixture(), gateway = await httpsFixture();
+const canvas = await httpsFixture(), gateway = await httpsFixture(), ltiPeer=await httpsFixture();
 const org = '750e8400-e29b-41d4-a716-446655440001';
 const CLIENT = 'synthetic_runtime_client_secret_00001';
 const ACCESS = 'synthetic_runtime_access_token_000001', REFRESH = 'synthetic_runtime_refresh_token_00001';
@@ -101,10 +102,14 @@ async function cliRuntime() {
   const { ca: _gatewayCa, ...gatewayOptions } = configuration.gatewayAuthentication;
   const { tls: _tls, ...httpOptions } = configuration.http;
   const configFile = join(directory, 'bootstrap-service.json');
+  const ltiCaFile=join(directory,'bootstrap-lti-ca.pem');
+  if(configuration.lti) await replacePrivate(ltiCaFile,configuration.lti.ca);
   await replacePrivate(configFile, JSON.stringify({ schemaVersion: 1,
     database: { ...databaseOptions, passwordFile: httpPasswordFile, caFile: caPaths.database },
     keyCustody: { ...keyOptions, tokenFile, caFile: caPaths.vault },
     canvas: { ...canvasOptions, caFile: caPaths.canvas },
+    ...(configuration.lti?{lti:{selfManagedOriginAllowlist:configuration.lti.selfManagedOriginAllowlist,
+      allowedPrivateAddresses:configuration.lti.allowedPrivateAddresses,timeoutMs:configuration.lti.timeoutMs,caFile:ltiCaFile}}:{}),
     gatewayAuthentication: { ...gatewayOptions, caFile: caPaths.gateway },
     http: { ...httpOptions, tlsKeyFile, tlsCertificateFile },
   }));
@@ -174,11 +179,11 @@ async function cliRuntime() {
 async function runtime(overrides = {}) {
   const value = await createConnectorOAuthRuntime({ ...configuration, ...overrides }); runtimes.push(value); return value;
 }
-function send(address, { path = '/platforms/runtime-platform/oauth/start', method = 'POST', body, cookie = 'session=abcdefghijklmnop' } = {}) {
+function send(address, { path = '/platforms/runtime-platform/oauth/start', method = 'POST', body, cookie = 'session=abcdefghijklmnop',requestOrigin=origin } = {}) {
   let req;
   const response = new Promise((resolve, reject) => {
     req = request({ hostname: 'localhost', servername: 'localhost', family: 4, port: address.port, ca: canvas.ca, agent: false,
-      method, path, headers: { Host: 'localhost', Origin: origin, Cookie: cookie,
+      method, path, headers: { Host: 'localhost', Origin: requestOrigin, Cookie: cookie,
         'Content-Type': 'application/x-www-form-urlencoded', 'X-Organization-ID': 'untrusted-org' } }, res => {
       let body = ''; res.setEncoding('utf8'); res.on('data', chunk => { body += chunk; });
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body })); res.on('error', reject);
@@ -279,6 +284,77 @@ try {
     } finally {owner(`ALTER TABLE canvas_connector.${table} ENABLE TRIGGER ${trigger};`);}
   }
   configuration.database = httpDatabase;
+  const lti={selfManagedOriginAllowlist:[ltiPeer.origin],allowedPrivateAddresses:['127.0.0.1','::1'],ca:ltiPeer.ca,timeoutMs:5000};
+  const missingLti=await runtime({lti});
+  await assert.rejects(missingLti.listen(),{message:'connector_oauth_runtime_unavailable'});
+  owner(`GRANT SELECT ON canvas_connector.lti_registrations,canvas_connector.lti_launch_states,
+    canvas_connector.lti_launch_receipts,canvas_connector.lti_registration_operation_audit TO canvas_oauth_http;
+    GRANT INSERT(id,organization_id,platform_id,client_id,deployment_id,trust_profile,environment,target_link_uri,enabled)
+      ON canvas_connector.lti_registrations TO canvas_oauth_http;
+    GRANT UPDATE(client_id,deployment_id,trust_profile,environment,target_link_uri,enabled,updated_at)
+      ON canvas_connector.lti_registrations TO canvas_oauth_http;
+    GRANT INSERT(state_hash,launch_id,browser_hash,organization_id,platform_id,registration_id,platform_version,registration_version,registration_snapshot,nonce)
+      ON canvas_connector.lti_launch_states TO canvas_oauth_http;
+    GRANT UPDATE(phase,token_hash,protocol_claims,accepted_at) ON canvas_connector.lti_launch_states TO canvas_oauth_http;
+    GRANT INSERT(state_hash,launch_id,token_hash,receipt) ON canvas_connector.lti_launch_receipts TO canvas_oauth_http;
+    GRANT INSERT(organization_id,operation_id,platform_id,registration_id,actor_id,action,request,receipt)
+      ON canvas_connector.lti_registration_operation_audit TO canvas_oauth_http;
+    GRANT SELECT ON canvas_connector.lti_provider_identities,canvas_connector.lti_provider_identity_claims,
+      canvas_connector.lti_provider_identity_observations TO canvas_oauth_http;
+    GRANT INSERT(id,organization_id,platform_id,issuer,client_id,deployment_id,subject) ON canvas_connector.lti_provider_identities TO canvas_oauth_http;
+    GRANT UPDATE(canvas_user_id,status) ON canvas_connector.lti_provider_identities TO canvas_oauth_http;
+    GRANT INSERT(identity_id,canvas_user_id) ON canvas_connector.lti_provider_identity_claims TO canvas_oauth_http;
+    GRANT INSERT(state_hash,launch_id,identity_id,token_hash,canvas_user_id,receipt) ON canvas_connector.lti_provider_identity_observations TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION canvas_connector.observe_lti_provider_identity(uuid,text,text,uuid) TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION canvas_connector.lti_visible_identifier(text),canvas_connector.lti_numeric_date(jsonb),canvas_connector.lti_canvas_user_id(text),
+      canvas_connector.lti_claims_match(jsonb,canvas_connector.lti_registrations,canvas_connector.platforms,text),
+      canvas_connector.begin_lti_launch(uuid,bigint,bigint,text,text,text,uuid),canvas_connector.stage_lti_launch(text,text,jsonb),
+      canvas_connector.confirm_lti_launch(text,text,text),canvas_connector.administer_lti_registration(text,text,text,uuid,uuid,text,bigint,bigint,jsonb)
+      TO canvas_oauth_http;`);
+  for(const [table,trigger] of [['lti_registrations','lti_registration_revision'],['lti_launch_states','lti_launch_state_transition'],
+    ['lti_launch_receipts','lti_launch_receipt_immutable'],['lti_registration_operation_audit','lti_registration_audit_immutable'],
+    ['lti_provider_identities','lti_provider_identity_revision'],['lti_provider_identity_claims','lti_provider_identity_claim_immutable'],
+    ['lti_provider_identity_observations','lti_provider_identity_observation_immutable']]) {
+    owner(`ALTER TABLE canvas_connector.${table} DISABLE TRIGGER ${trigger};`);
+    try {const denied=await runtime({lti});await assert.rejects(denied.listen(),{message:'connector_oauth_runtime_unavailable'});}
+    finally {owner(`ALTER TABLE canvas_connector.${table} ENABLE TRIGGER ${trigger};`);}
+  }
+  owner('GRANT UPDATE(receipt) ON canvas_connector.lti_launch_receipts TO canvas_oauth_http;');
+  try {const denied=await runtime({lti});await assert.rejects(denied.listen(),{message:'connector_oauth_runtime_unavailable'});}
+  finally {owner('REVOKE UPDATE(receipt) ON canvas_connector.lti_launch_receipts FROM canvas_oauth_http;');}
+  for(const [change,restore] of [
+    ['REVOKE EXECUTE ON FUNCTION canvas_connector.confirm_lti_launch(text,text,text) FROM canvas_oauth_http',
+      'GRANT EXECUTE ON FUNCTION canvas_connector.confirm_lti_launch(text,text,text) TO canvas_oauth_http'],
+    ['GRANT DELETE ON canvas_connector.lti_launch_states TO canvas_oauth_http','REVOKE DELETE ON canvas_connector.lti_launch_states FROM canvas_oauth_http'],
+    ['GRANT UPDATE(id) ON canvas_connector.lti_registrations TO canvas_oauth_http','REVOKE UPDATE(id) ON canvas_connector.lti_registrations FROM canvas_oauth_http'],
+    ['GRANT CREATE ON SCHEMA canvas_connector TO canvas_oauth_http','REVOKE CREATE ON SCHEMA canvas_connector FROM canvas_oauth_http'],
+    ['ALTER ROLE canvas_oauth_http BYPASSRLS','ALTER ROLE canvas_oauth_http NOBYPASSRLS'],
+    ['ALTER FUNCTION canvas_connector.guard_lti_launch_state() SECURITY DEFINER','ALTER FUNCTION canvas_connector.guard_lti_launch_state() SECURITY INVOKER'],
+  ]) {
+    owner(change);
+    try {const denied=await runtime({lti});await assert.rejects(denied.listen(),{message:'connector_oauth_runtime_unavailable'});}
+    finally {owner(restore);}
+  }
+  const optedOut=await runtime(),optedOutAddress=await optedOut.listen();
+  owner(`CREATE ROLE lti_set_role_mutator;
+    GRANT UPDATE(receipt) ON canvas_connector.lti_launch_receipts TO lti_set_role_mutator;
+    GRANT lti_set_role_mutator TO canvas_oauth_http WITH INHERIT FALSE;`);
+  try {const denied=await runtime({lti});await assert.rejects(denied.listen(),{message:'connector_oauth_runtime_unavailable'});}
+  finally {owner('REVOKE lti_set_role_mutator FROM canvas_oauth_http; DROP OWNED BY lti_set_role_mutator; DROP ROLE lti_set_role_mutator;');}
+  owner(`CREATE ROLE lti_set_role_owner;
+    GRANT CREATE ON SCHEMA canvas_connector TO lti_set_role_owner;
+    ALTER FUNCTION canvas_connector.confirm_lti_launch(text,text,text) OWNER TO lti_set_role_owner;
+    REVOKE CREATE ON SCHEMA canvas_connector FROM lti_set_role_owner;
+    GRANT lti_set_role_owner TO canvas_oauth_http WITH INHERIT FALSE;`);
+  try {const denied=await runtime({lti});await assert.rejects(denied.listen(),{message:'connector_oauth_runtime_unavailable'});}
+  finally {owner(`REVOKE lti_set_role_owner FROM canvas_oauth_http;
+    ALTER FUNCTION canvas_connector.confirm_lti_launch(text,text,text) OWNER TO postgres;
+    DROP OWNED BY lti_set_role_owner; DROP ROLE lti_set_role_owner;`);}
+  assert.equal((await send(optedOutAddress,{path:'/lti/registrations/'+randomUUID()+'/login?iss=unused&login_hint=opaque',method:'GET'}).response).status,404);
+  await optedOut.close();
+  configuration.lti=lti;
+  const ltiServer=fileCustody?await cliRuntime():await runtime(),ltiAddress=await ltiServer.listen();
+  await ltiRuntimeHttpContract({owner,pool,send,server:ltiServer,address:ltiAddress,peer:ltiPeer,org,origin});
   const httpPool = createConnectorPostgresPool(httpDatabase);
   try {
     await assert.rejects(httpPool.query("UPDATE canvas_connector.platforms SET canvas_origin='https://evil.example.test'"));
@@ -450,5 +526,5 @@ try {
 } finally {
   release();
   for (const server of runtimes) await server.close();
-  await pool.close(); await canvas.close(); await gateway.close();
+  await pool.close(); await canvas.close(); await gateway.close(); await ltiPeer.close();
 }

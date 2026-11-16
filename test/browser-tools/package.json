@@ -1,0 +1,9 @@
+{
+  "name": "canvas-lti-browser-contract-tools",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "playwright": "1.59.1"
+  }
+}

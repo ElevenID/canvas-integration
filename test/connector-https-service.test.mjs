@@ -12,6 +12,12 @@ const origin = 'https://localhost';
 const state = Buffer.alloc(32, 8).toString('base64url');
 const form = 'client_id=client&client_secret_ref=opaque-client-secret&capabilities=catalog';
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const ltiRegistration='10000000-0000-4000-8000-000000000002';
+const ltiLogin=`/lti/registrations/${ltiRegistration}/login?iss=https%3A%2F%2Fcanvas.instructure.com&login_hint=opaque`;
+const ltiPlan={registrationId:ltiRegistration,launchId:'synthetic-launch',state,browserProof:Buffer.alloc(32,9).toString('base64url'),
+  canvasOrigin:'https://college.instructure.com',storageOrigin:'https://sso.canvaslms.com',
+  authorizationUrl:'https://sso.canvaslms.com/api/lti/authorize_redirect'};
+const ltiMethods=begin=>({begin,browserContext:async()=>({}),stage:async()=>({}),confirm:async()=>({}),active:async()=>({})});
 async function fixture(t, overrides = {}) {
   const peer = await httpsFixture();
   const starts = [], callbacks = [];
@@ -57,6 +63,26 @@ async function fixture(t, overrides = {}) {
   const send = async options => begin(options).response;
   return { service, send, begin, starts, callbacks, peer, address, configuration };
 }
+
+test('LTI routes are opt-in and share the bounded HTTPS dispatcher without Gateway privilege impersonation',async t=>{
+  const absent=await fixture(t);
+  assert.equal((await absent.send({path:ltiLogin,method:'GET'})).status,404);
+  let calls=0;const enabled=await fixture(t,{ltiLifecycle:ltiMethods(async()=>{calls++;return ltiPlan;})});
+  const result=await enabled.send({path:ltiLogin,method:'GET'});
+  assert.equal(result.status,200);assert.match(result.headers['set-cookie'][0],/^__Host-canvas_lti_/);
+  assert.equal(calls,1);assert.equal(enabled.starts.length,0);assert.equal(enabled.peer.seen.length,0);
+});
+
+test('LTI work keeps its concurrency reservation and shutdown waits after peer disconnect',async t=>{
+  const entered=deferred(),release=deferred();
+  const f=await fixture(t,{maxConcurrentRequests:1,ltiLifecycle:ltiMethods(async()=>{entered.resolve();await release.promise;return ltiPlan;})});
+  const pending=f.begin({path:ltiLogin,method:'GET'});void pending.response.catch(()=>{});
+  await entered.promise;pending.request.destroy();
+  assert.equal((await f.send({path:ltiLogin,method:'GET'})).status,503);
+  let closed=false;const closing=f.service.close().then(()=>{closed=true;});
+  await setImmediate();assert.equal(closed,false);
+  release.resolve();await closing;assert.equal(closed,true);
+});
 
 test('real HTTPS service composes Gateway-only admin authentication and browser-bound callback', async t => {
   const f = await fixture(t);

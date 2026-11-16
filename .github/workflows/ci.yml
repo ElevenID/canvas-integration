@@ -10,6 +10,43 @@ concurrency:
   group: canvas-boundary-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  lti-browser:
+    name: Connector LTI Chromium protocol
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install isolated pinned browser tooling
+        shell: bash
+        run: |
+          tools="$RUNNER_TEMP/canvas-lti-browser-tools"
+          mkdir -p "$tools"
+          cp test/browser-tools/package.json test/browser-tools/package-lock.json "$tools/"
+          npm ci --prefix "$tools" --ignore-scripts --no-audit --no-fund
+          node "$tools/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Test real Chromium against owned PostgreSQL and HTTPS peers
+        shell: bash
+        run: python3 scripts/test_lti_state.py --browser-tests "$RUNNER_TEMP/canvas-lti-browser-tools/node_modules/playwright/index.mjs"
+  lti-state:
+    name: Connector LTI state and browser-proof protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Test real PostgreSQL and pinned HTTPS LTI staging and acceptance
+        run: python3 scripts/test_lti_state.py
   storage:
     name: Connector PostgreSQL storage contract
     runs-on: ubuntu-latest
