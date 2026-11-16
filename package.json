@@ -49,6 +49,11 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/revocation-worker.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./refresh-worker": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/refresh-worker.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {

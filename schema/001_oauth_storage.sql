@@ -251,6 +251,101 @@ RETURNS boolean LANGUAGE sql AS $$
     ) SELECT EXISTS(SELECT 1 FROM retried);
 $$;
 
+-- Refresh attempts retain only references. An expired in-flight exchange is
+-- never reclaimed automatically: its external outcome must be reconciled.
+CREATE TABLE canvas_connector.refresh_attempts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    lease_id uuid NOT NULL DEFAULT gen_random_uuid(),
+    lease_until timestamptz NOT NULL DEFAULT clock_timestamp()+interval '1 minute',
+    organization_id text NOT NULL,
+    platform_id text NOT NULL,
+    connection_revision bigint NOT NULL,
+    config_version bigint NOT NULL,
+    canvas_origin text NOT NULL,
+    client_id text NOT NULL,
+    client_secret_ref text NOT NULL,
+    access_token_ref text NOT NULL,
+    refresh_token_ref text NOT NULL,
+    phase text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','exchanging','published','abandoned','reconciliation_required')),
+    new_access_token_ref text,
+    new_refresh_token_ref text,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE UNIQUE INDEX refresh_active_platform ON canvas_connector.refresh_attempts(organization_id,platform_id)
+    WHERE phase IN ('claimed','exchanging','reconciliation_required');
+
+CREATE FUNCTION canvas_connector.claim_refresh(org text, platform text)
+RETURNS SETOF canvas_connector.refresh_attempts LANGUAGE plpgsql AS $$
+DECLARE configuration canvas_connector.platforms; connection canvas_connector.connections;
+BEGIN
+    SELECT * INTO configuration FROM canvas_connector.platforms
+     WHERE organization_id=org AND id=platform FOR UPDATE;
+    IF NOT FOUND OR NOT configuration.enabled OR configuration.archived THEN RETURN; END IF;
+    SELECT * INTO connection FROM canvas_connector.connections
+     WHERE organization_id=org AND platform_id=platform FOR UPDATE;
+    IF NOT FOUND OR connection.status <> 'connected' OR connection.refresh_token_ref IS NULL
+       OR connection.platform_config_version <> configuration.config_version
+       OR connection.token_expires_at IS NULL
+       OR connection.token_expires_at > clock_timestamp()+interval '5 minutes' THEN RETURN; END IF;
+    UPDATE canvas_connector.refresh_attempts SET phase='abandoned'
+     WHERE organization_id=org AND platform_id=platform AND phase='claimed' AND lease_until <= clock_timestamp();
+    IF EXISTS(SELECT 1 FROM canvas_connector.refresh_attempts WHERE organization_id=org AND platform_id=platform
+              AND phase IN ('claimed','exchanging','reconciliation_required')) THEN RETURN; END IF;
+    RETURN QUERY INSERT INTO canvas_connector.refresh_attempts
+      (organization_id,platform_id,connection_revision,config_version,canvas_origin,client_id,
+       client_secret_ref,access_token_ref,refresh_token_ref)
+      VALUES (org,platform,connection.revision,configuration.config_version,connection.canvas_origin,
+        connection.client_id,connection.client_secret_ref,connection.access_token_ref,connection.refresh_token_ref)
+      RETURNING *;
+END;
+$$;
+
+CREATE FUNCTION canvas_connector.begin_refresh_exchange(job uuid, lease uuid)
+RETURNS boolean LANGUAGE sql AS $$
+    WITH changed AS (UPDATE canvas_connector.refresh_attempts SET phase='exchanging'
+      WHERE id=job AND lease_id=lease AND phase='claimed' AND lease_until > clock_timestamp() RETURNING id)
+    SELECT EXISTS(SELECT 1 FROM changed);
+$$;
+CREATE FUNCTION canvas_connector.require_refresh_reconciliation(job uuid, lease uuid)
+RETURNS boolean LANGUAGE sql AS $$
+    WITH changed AS (UPDATE canvas_connector.refresh_attempts SET phase='reconciliation_required'
+      WHERE id=job AND lease_id=lease AND phase='exchanging' RETURNING id)
+    SELECT EXISTS(SELECT 1 FROM changed);
+$$;
+CREATE FUNCTION canvas_connector.abandon_unstarted_refresh(job uuid, lease uuid)
+RETURNS boolean LANGUAGE sql AS $$
+    WITH changed AS (UPDATE canvas_connector.refresh_attempts SET phase='abandoned'
+      WHERE id=job AND lease_id=lease AND phase='claimed' RETURNING id)
+    SELECT EXISTS(SELECT 1 FROM changed);
+$$;
+
+CREATE FUNCTION canvas_connector.publish_refresh(job uuid, lease uuid, access_ref text, refresh_ref text, expiry timestamptz)
+RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE attempt canvas_connector.refresh_attempts; configuration canvas_connector.platforms;
+        connection canvas_connector.connections;
+BEGIN
+    SELECT * INTO attempt FROM canvas_connector.refresh_attempts WHERE id=job;
+    IF NOT FOUND THEN RETURN false; END IF;
+    SELECT * INTO configuration FROM canvas_connector.platforms
+      WHERE organization_id=attempt.organization_id AND id=attempt.platform_id FOR UPDATE;
+    IF NOT FOUND THEN RETURN false; END IF;
+    SELECT * INTO connection FROM canvas_connector.connections
+      WHERE organization_id=attempt.organization_id AND platform_id=attempt.platform_id FOR UPDATE;
+    IF NOT FOUND THEN RETURN false; END IF;
+    SELECT * INTO attempt FROM canvas_connector.refresh_attempts WHERE id=job FOR UPDATE;
+    IF attempt.lease_id <> lease OR attempt.phase <> 'exchanging' OR attempt.lease_until <= clock_timestamp()
+       OR NOT configuration.enabled OR configuration.archived OR configuration.config_version <> attempt.config_version
+       OR connection.revision <> attempt.connection_revision OR connection.status <> 'connected'
+       OR expiry IS NULL OR expiry <= clock_timestamp()
+       OR access_ref IS NULL OR access_ref=connection.access_token_ref OR refresh_ref IS NULL THEN RETURN false; END IF;
+    UPDATE canvas_connector.connections SET access_token_ref=access_ref,refresh_token_ref=refresh_ref,token_expires_at=expiry
+      WHERE organization_id=attempt.organization_id AND platform_id=attempt.platform_id;
+    UPDATE canvas_connector.refresh_attempts SET phase='published',new_access_token_ref=access_ref,new_refresh_token_ref=refresh_ref
+      WHERE id=job;
+    RETURN true;
+END;
+$$;
+
 REVOKE ALL ON SCHEMA canvas_connector FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA canvas_connector FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA canvas_connector FROM PUBLIC;

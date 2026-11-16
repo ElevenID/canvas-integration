@@ -61,7 +61,7 @@ The service is not an HTTP server or a production storage adapter. Before deploy
 - Connector-owned encrypted secret vault with tenant-scoped metadata, access control, rotation and deletion. No Marty integration-secret vault or core database access.
 - A server-authenticated admin backend that derives organization/platform authority from the authenticated user session and checks management permissions before calling `start`.
 - A public callback HTTP adapter that rejects duplicate query parameters, bounds query/body sizes, accepts only expected fields, redacts query strings from access logs and applies rate limits.
-- Refresh leases, token rotation, durable revocation queue, backoff and cleanup workers. The provider exposes a refresh-token exchange, but lifecycle refresh/disconnect workers are not yet implemented.
+- Refresh leases, token rotation, durable revocation queue, backoff and cleanup workers. The provider exposes a refresh-token exchange, but candidate durable refresh/disconnect worker engines now exist (see REFRESH_WORKER.md and REVOCATION_WORKER.md); deployment scheduling and reconciliation still require qualification.
 - Integration acceptance against a synthetic Canvas tenant and connector-owned storage; no real tenant or production OAuth grants were used in this stage.
 
 No public Gateway route, API-key scope, core database migration or Canvas production callback was enabled by this PR. The existing Marty implementation remains in place until the new service, persistence and HTTP adapters are independently qualified.

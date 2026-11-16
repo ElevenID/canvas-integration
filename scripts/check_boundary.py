@@ -11,6 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 IMPORTS = {
+    "src/refresh-worker.mjs": set(),
     "src/revocation-worker.mjs": set(),
     "src/encrypted-vault.mjs": {"node:crypto"},
     "src/postgres-repository.mjs": set(),
@@ -65,7 +66,8 @@ def audit(root: Path) -> list[str]:
                 "./canvas-oauth-provider": "./src/canvas-oauth-provider.mjs",
                 "./postgres-repository": "./src/postgres-repository.mjs",
                 "./encrypted-vault": "./src/encrypted-vault.mjs",
-                "./revocation-worker": "./src/revocation-worker.mjs"}
+                "./revocation-worker": "./src/revocation-worker.mjs",
+                "./refresh-worker": "./src/refresh-worker.mjs"}
     if set(package.get("exports", {})) != set(expected):
         errors.append("unexpected package export")
     for name, target in expected.items():
@@ -112,4 +114,4 @@ if __name__ == "__main__":
     if violations:
         print("Boundary check failed:\n" + "\n".join(violations), file=sys.stderr)
         sys.exit(1)
-    print("Boundary check passed: thirteen runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")
+    print("Boundary check passed: fourteen runtime modules, separate Gateway/Canvas HTTPS owners, no external dependencies.")

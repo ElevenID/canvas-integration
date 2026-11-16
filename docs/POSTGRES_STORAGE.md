@@ -78,4 +78,4 @@ that bridge is not a production driver or transport implementation.
 
 The encrypted vault adapter is documented in ENCRYPTED_VAULT.md. External key-provider
 wiring, administrative operations, driver/deployment wiring,
-refresh/revocation workers and deployed acceptance tests remain required.
+refresh/revocation scheduling, reconciliation and deployed acceptance tests remain required.

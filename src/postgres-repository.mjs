@@ -19,6 +19,25 @@ export function createPostgresRepository(pool) {
     refresh_token_ref AS "refreshTokenRef", (extract(epoch FROM token_expires_at)*1000)::float8 AS "tokenExpiresAt",
     capabilities, scopes, status FROM canvas_connector.connections WHERE organization_id=$1 AND platform_id=$2`;
   return Object.freeze({
+    async claimRefresh(org, id) {
+      return first(`SELECT id,lease_id AS "leaseId",organization_id AS "organizationId",platform_id AS "platformId",
+        canvas_origin AS "canvasOrigin",client_id AS "clientId",client_secret_ref AS "clientSecretRef",
+        access_token_ref AS "accessTokenRef",refresh_token_ref AS "refreshTokenRef"
+        FROM canvas_connector.claim_refresh($1,$2)`, [org, id]);
+    },
+    async beginRefreshExchange(id, lease) {
+      return (await first('SELECT canvas_connector.begin_refresh_exchange($1,$2) AS ok', [id, lease])).ok === true;
+    },
+    async requireRefreshReconciliation(id, lease) {
+      return (await first('SELECT canvas_connector.require_refresh_reconciliation($1,$2) AS ok', [id, lease])).ok === true;
+    },
+    async abandonUnstartedRefresh(id, lease) {
+      return (await first('SELECT canvas_connector.abandon_unstarted_refresh($1,$2) AS ok', [id, lease])).ok === true;
+    },
+    async publishRefresh(id, lease, access, refresh, expiresAt) {
+      return (await first('SELECT canvas_connector.publish_refresh($1,$2,$3,$4,to_timestamp($5::float8/1000)) AS ok',
+        [id, lease, access, refresh, expiresAt])).ok === true;
+    },
     async disconnect(org, id) {
       return (await first('SELECT canvas_connector.disconnect($1,$2) AS ok', [org, id])).ok === true;
     },

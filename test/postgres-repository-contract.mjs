@@ -7,6 +7,7 @@ import { createPostgresRepository } from '../src/postgres-repository.mjs';
 import { createCanvasOAuthLifecycle } from '../src/canvas-oauth.mjs';
 import { createEncryptedVault } from '../src/encrypted-vault.mjs';
 import { createRevocationWorker } from '../src/revocation-worker.mjs';
+import { createRefreshWorker } from '../src/refresh-worker.mjs';
 import { createCanvasOAuthProvider } from '../src/canvas-oauth-provider.mjs';
 import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
 
@@ -223,3 +224,57 @@ try {
   assert.equal(await concreteWorker.runOnce(), 'idle');
 } finally { await https.close(); }
 console.log('PostgreSQL + encrypted vault + concrete pinned HTTPS revocation passed');
+
+for (const outcome of ['success', 'lost-commit-ack', 'provider-failure', 'configuration-change']) {
+  const fixture = await httpsFixture();
+  try {
+    const organizationId = 'refresh-' + outcome;
+    await pool.query(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled)
+      VALUES ($1,'platform',$2,true) RETURNING id`, [organizationId, fixture.origin]);
+    const put = (purpose, value) => vault.put(organizationId, { platformId: 'platform', provider: 'canvas', purpose }, value);
+    const client = await put('oauth_client_secret', 'synthetic-refresh-client-secret');
+    const oldAccess = await put('oauth_access_token', 'synthetic-old-access');
+    const refresh = await put('oauth_refresh_token', 'synthetic-stable-refresh');
+    assert.equal(await repository.publishConnection({ ...connection, organizationId, platformId: 'platform',
+      canvasOrigin: fixture.origin, clientSecretRef: client, accessTokenRef: oldAccess,
+      refreshTokenRef: refresh, tokenExpiresAt: Date.now()+60000 }, 1), true);
+    if (outcome === 'success') {
+      const claimed = await repository.claimRefresh(organizationId, 'platform');
+      assert.equal(await repository.claimRefresh(organizationId, 'platform'), null);
+      await pool.query('UPDATE canvas_connector.refresh_attempts SET lease_until=clock_timestamp()-interval \'1 second\' WHERE id=$1 RETURNING id', [claimed.id]);
+      const replacement = await repository.claimRefresh(organizationId, 'platform');
+      assert.notEqual(replacement.id, claimed.id);
+      assert.equal(await repository.beginRefreshExchange(claimed.id, claimed.leaseId), false);
+      assert.equal(await repository.abandonUnstartedRefresh(replacement.id, replacement.leaseId), true);
+    }
+    let calls = 0;
+    fixture.setHandler(async (req, res) => {
+      calls++; assert.equal(req.method, 'POST'); assert.equal(req.url, '/login/oauth2/token');
+      assert.equal(req.headers['x-api-key'], undefined);
+      if (outcome === 'configuration-change') await pool.query(
+        'UPDATE canvas_connector.platforms SET enabled=false WHERE organization_id=$1 RETURNING id', [organizationId]);
+      if (outcome === 'provider-failure') { res.writeHead(500); res.end(); }
+      else json(res, { access_token: 'synthetic-new-access', expires_in: 3600, token_type: 'Bearer' });
+    });
+    const refreshRepository = outcome === 'lost-commit-ack' ? { ...repository,
+      async publishRefresh(...args) { await repository.publishRefresh(...args); throw Error('lost acknowledgment'); },
+    } : repository;
+    const refreshWorker = createRefreshWorker({ repository: refreshRepository, secretVault: vault,
+      provider: createCanvasOAuthProvider({ allowedPrivateAddresses: ['127.0.0.1', '::1'], ca: fixture.ca }) });
+    assert.equal(await refreshWorker.runOnce(organizationId, 'platform'), outcome === 'success' ? 'published' : 'reconciliation_required');
+    assert.equal(calls, 1);
+    const current = await repository.connection(organizationId, 'platform');
+    assert.equal(current.refreshTokenRef, refresh, 'Canvas refresh response may omit the reusable refresh token');
+    if (['success', 'lost-commit-ack'].includes(outcome)) {
+      assert.equal(await vault.get(organizationId, current.accessTokenRef), 'synthetic-new-access');
+      assert.notEqual(current.accessTokenRef, oldAccess);
+    } else assert.equal(current.accessTokenRef, oldAccess);
+    assert.equal(await vault.get(organizationId, refresh), 'synthetic-stable-refresh');
+    if (outcome === 'success') assert.equal(await vault.metadata(organizationId, oldAccess), null);
+    else assert.notEqual(await vault.metadata(organizationId, oldAccess), null, 'uncertain outcomes must preserve old ciphertext');
+    await pool.query('UPDATE canvas_connector.refresh_attempts SET lease_until=clock_timestamp()-interval \'1 second\' WHERE organization_id=$1 RETURNING id', [organizationId]);
+    assert.equal(await refreshWorker.runOnce(organizationId, 'platform'), 'idle');
+    assert.equal(calls, 1, 'expired in-flight attempts must not repeat exchanges automatically');
+  } finally { await fixture.close(); }
+}
+console.log('Durable refresh passed concrete HTTPS exchange, reusable refresh token, uncertain commit and configuration-change contracts');
