@@ -91,7 +91,8 @@ The optional runtime `lti` policy accepts only `selfManagedOriginAllowlist`,
 uses `caFile` instead of inline `ca`; it never inherits OAuth network policy or CA.
 Startup performs read-only required-capability and guard checks before listening,
 rejecting missing privileges, disabled guards, identity/receipt mutation rights,
-table/function ownership, elevated role flags and connector schema CREATE.
+table/function ownership, elevated role flags and connector schema CREATE,
+including forbidden capabilities reachable through NOINHERIT role membership.
 It installs no schema or grants. These checks are not a complete schema provenance
 audit or a tenant/JWT SQL sandbox; owner provisioning and production role approval
 remain separate deployment gates.

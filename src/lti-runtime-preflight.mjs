@@ -2,17 +2,19 @@
 // Read-only capability and guard checks. Owner provisioning is separate; this
 // is not a complete schema provenance audit or a tenant/JWT SQL sandbox.
 export async function preflightLtiRuntime(pool) {
-  const result=await pool.query(`SELECT
-    NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname=current_user AND
+  const result=await pool.query(`WITH reachable_roles AS (
+    SELECT oid,rolname FROM pg_catalog.pg_roles WHERE pg_has_role(current_user,oid,'MEMBER')
+  ) SELECT
+    NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE oid IN(SELECT oid FROM reachable_roles) AND
       (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls))
-    AND NOT has_schema_privilege(current_user,'canvas_connector','CREATE')
+    AND NOT EXISTS(SELECT 1 FROM reachable_roles WHERE has_schema_privilege(oid,'canvas_connector','CREATE'))
     AND NOT EXISTS(SELECT 1 FROM (VALUES
       ('lti_registrations'),('lti_launch_states'),('lti_launch_receipts'),('lti_registration_operation_audit')
     ) required(name) JOIN pg_catalog.pg_class c ON c.oid=('canvas_connector.'||required.name)::regclass
       WHERE c.relkind<>'r' OR c.relpersistence<>'p' OR c.relrowsecurity OR c.relforcerowsecurity
-        OR pg_has_role(current_user,c.relowner,'USAGE')
+        OR pg_has_role(current_user,c.relowner,'MEMBER')
         OR NOT has_table_privilege(current_user,c.oid,'SELECT')
-        OR has_table_privilege(current_user,c.oid,'DELETE,TRUNCATE,REFERENCES,TRIGGER')
+        OR EXISTS(SELECT 1 FROM reachable_roles WHERE has_table_privilege(oid,c.oid,'DELETE,TRUNCATE,REFERENCES,TRIGGER'))
         OR EXISTS(SELECT 1 FROM pg_catalog.pg_rewrite WHERE ev_class=c.oid))
     AND NOT EXISTS(SELECT 1 FROM (VALUES
       ('lti_registrations','INSERT',ARRAY['id','organization_id','platform_id','client_id','deployment_id','trust_profile','environment','target_link_uri','enabled']),
@@ -28,8 +30,8 @@ export async function preflightLtiRuntime(pool) {
       ('lti_launch_states',ARRAY['state_hash','launch_id','browser_hash','organization_id','platform_id','registration_id','platform_version','registration_version','registration_snapshot','nonce','created_at','expires_at']),
       ('lti_launch_receipts',ARRAY['state_hash','launch_id','token_hash','receipt','created_at']),
       ('lti_registration_operation_audit',ARRAY['organization_id','operation_id','platform_id','registration_id','actor_id','action','request','receipt','created_at'])
-    ) forbidden(relation,names) CROSS JOIN LATERAL unnest(forbidden.names) field(name)
-      WHERE has_column_privilege(current_user,'canvas_connector.'||forbidden.relation,field.name,'UPDATE'))
+    ) forbidden(relation,names) CROSS JOIN LATERAL unnest(forbidden.names) field(name) CROSS JOIN reachable_roles reachable
+      WHERE has_column_privilege(reachable.oid,'canvas_connector.'||forbidden.relation,field.name,'UPDATE'))
     AND (SELECT count(*)=4 FROM pg_catalog.pg_trigger t JOIN (VALUES
       ('lti_registrations','lti_registration_revision','bump_lti_registration()',19),
       ('lti_launch_states','lti_launch_state_transition','guard_lti_launch_state()',19),
@@ -44,7 +46,7 @@ export async function preflightLtiRuntime(pool) {
       ('bump_lti_registration()'),('guard_lti_launch_state()'),('keep_lti_launch_receipt()'),('keep_lti_registration_audit()')
     ) expected(signature) JOIN pg_catalog.pg_proc p ON p.oid=('canvas_connector.'||expected.signature)::regprocedure
       WHERE p.prosecdef OR p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog']
-        OR pg_has_role(current_user,p.proowner,'USAGE'))
+        OR pg_has_role(current_user,p.proowner,'MEMBER'))
     AND NOT EXISTS(SELECT 1 FROM (VALUES
       ('lti_visible_identifier(text)'),('lti_numeric_date(jsonb)'),
       ('lti_claims_match(jsonb,canvas_connector.lti_registrations,canvas_connector.platforms,text)'),
@@ -52,7 +54,7 @@ export async function preflightLtiRuntime(pool) {
       ('confirm_lti_launch(text,text,text)'),('administer_lti_registration(text,text,text,uuid,uuid,text,bigint,bigint,jsonb)')
     ) required(signature) JOIN pg_catalog.pg_proc p ON p.oid=('canvas_connector.'||required.signature)::regprocedure
       WHERE p.prosecdef OR p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog']
-        OR pg_has_role(current_user,p.proowner,'USAGE') OR NOT has_function_privilege(current_user,p.oid,'EXECUTE'))
+        OR pg_has_role(current_user,p.proowner,'MEMBER') OR NOT has_function_privilege(current_user,p.oid,'EXECUTE'))
     AS ready`);
   if(result?.rows?.length!==1 || result.rows[0].ready!==true) throw Error('lti_runtime_unavailable');
 }

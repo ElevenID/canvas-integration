@@ -327,6 +327,20 @@ try {
     finally {owner(restore);}
   }
   const optedOut=await runtime(),optedOutAddress=await optedOut.listen();
+  owner(`CREATE ROLE lti_set_role_mutator;
+    GRANT UPDATE(receipt) ON canvas_connector.lti_launch_receipts TO lti_set_role_mutator;
+    GRANT lti_set_role_mutator TO canvas_oauth_http WITH INHERIT FALSE;`);
+  try {const denied=await runtime({lti});await assert.rejects(denied.listen(),{message:'connector_oauth_runtime_unavailable'});}
+  finally {owner('REVOKE lti_set_role_mutator FROM canvas_oauth_http; DROP OWNED BY lti_set_role_mutator; DROP ROLE lti_set_role_mutator;');}
+  owner(`CREATE ROLE lti_set_role_owner;
+    GRANT CREATE ON SCHEMA canvas_connector TO lti_set_role_owner;
+    ALTER FUNCTION canvas_connector.confirm_lti_launch(text,text,text) OWNER TO lti_set_role_owner;
+    REVOKE CREATE ON SCHEMA canvas_connector FROM lti_set_role_owner;
+    GRANT lti_set_role_owner TO canvas_oauth_http WITH INHERIT FALSE;`);
+  try {const denied=await runtime({lti});await assert.rejects(denied.listen(),{message:'connector_oauth_runtime_unavailable'});}
+  finally {owner(`REVOKE lti_set_role_owner FROM canvas_oauth_http;
+    ALTER FUNCTION canvas_connector.confirm_lti_launch(text,text,text) OWNER TO postgres;
+    DROP OWNED BY lti_set_role_owner; DROP ROLE lti_set_role_owner;`);}
   assert.equal((await send(optedOutAddress,{path:'/lti/registrations/'+randomUUID()+'/login?iss=unused&login_hint=opaque',method:'GET'}).response).status,404);
   await optedOut.close();
   configuration.lti=lti;
