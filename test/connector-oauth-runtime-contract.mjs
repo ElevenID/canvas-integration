@@ -7,6 +7,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { request } from 'node:https';
 import { createConnection } from 'node:net';
+import { randomUUID } from 'node:crypto';
 import { setImmediate, setTimeout as pause } from 'node:timers/promises';
 import { createConnectorPostgresPool } from '../src/postgres-pool.mjs';
 import { createPostgresRepository } from '../src/postgres-repository.mjs';
@@ -213,6 +214,9 @@ try {
     GRANT SELECT,INSERT,UPDATE ON canvas_connector.authorization_attempts TO canvas_oauth_http;
     GRANT SELECT,INSERT ON canvas_connector.authorization_recovery_audit,canvas_connector.revocation_jobs TO canvas_oauth_http;
     GRANT SELECT,INSERT,UPDATE ON canvas_connector.oauth_status,canvas_connector.connections TO canvas_oauth_http;
+    GRANT DELETE ON canvas_connector.connections TO canvas_oauth_http;
+    GRANT SELECT(organization_id,platform_id,phase,lease_until) ON canvas_connector.refresh_attempts TO canvas_oauth_http;
+    GRANT SELECT,INSERT ON canvas_connector.connection_operation_audit TO canvas_oauth_http;
     GRANT UPDATE(hits,window_started_at) ON canvas_connector.oauth_http_limit TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION canvas_connector.consume_oauth_http_limit(),
       canvas_connector.consume_authorization_attempt(text,text),
@@ -220,6 +224,7 @@ try {
       canvas_connector.require_authorization_reconciliation(text,text,text),
       canvas_connector.publish_authorization_connection(text,text,text),
       canvas_connector.recover_authorization_attempt(text,text,text,bigint,uuid,text,text) TO canvas_oauth_http;
+    GRANT EXECUTE ON FUNCTION canvas_connector.disconnect_connection(text,text,uuid,bigint,uuid,text) TO canvas_oauth_http;
     GRANT EXECUTE ON FUNCTION
       canvas_connector.stage_authorization_result(text,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamptz),
       canvas_connector.mark_authorization_pending(text,text,bigint,text),
@@ -240,6 +245,14 @@ try {
     const missingGuard = await runtime({ database: httpDatabase });
     await assert.rejects(missingGuard.listen(), { message: 'connector_oauth_runtime_unavailable' });
   } finally { owner('ALTER TABLE canvas_connector.secrets ENABLE TRIGGER secret_creation_time;'); }
+  for(const [table,trigger] of [['connections','connection_identity'],['authorization_attempts','authorization_cleanup'],
+    ['connection_operation_audit','connection_operation_audit_immutable']]) {
+    owner(`ALTER TABLE canvas_connector.${table} DISABLE TRIGGER ${trigger};`);
+    try {
+      const missingGuard=await runtime({database:httpDatabase});
+      await assert.rejects(missingGuard.listen(),{message:'connector_oauth_runtime_unavailable'});
+    } finally {owner(`ALTER TABLE canvas_connector.${table} ENABLE TRIGGER ${trigger};`);}
+  }
   configuration.database = httpDatabase;
   const httpPool = createConnectorPostgresPool(httpDatabase);
   try {
@@ -313,6 +326,28 @@ try {
   assert.equal(exchanges, 1);
   assert.ok(gateway.seen.every(r => r.headers.cookie === 'session=abcdefghijklmnop' && !r.headers['x-api-key'] && !r.headers.authorization));
   assert.ok(gateway.seen.every(r => !r.url.includes(ACCESS) && !r.url.includes(CLIENT)));
+  const connectionPath='/platforms/runtime-platform/connection/';
+  const snapshot=JSON.parse((await send(secondAddress,{path:connectionPath+'inspect',body:''}).response).body);
+  assert.equal(snapshot.connection.status,'connected');
+  const disconnectBody=new URLSearchParams({connection_id:snapshot.connection.connectionId,
+    expected_revision:String(snapshot.connection.revision),operation_id:randomUUID()}).toString();
+  permitted=false;
+  assert.equal((await send(secondAddress,{path:connectionPath+'disconnect',body:disconnectBody}).response).status,403);
+  assert.equal((await pool.query('SELECT count(*)::int AS count FROM canvas_connector.connections WHERE organization_id=$1',[org])).rows[0].count,1);
+  permitted=true;
+  const disconnected=await send(secondAddress,{path:connectionPath+'disconnect',body:disconnectBody}).response;
+  assert.equal(disconnected.status,200);
+  const disconnectReceipt=JSON.parse(disconnected.body).receipt;
+  assert.equal(disconnectReceipt.actorId,'actor');assert.equal(disconnectReceipt.status,'disconnected');
+  assert.deepEqual(JSON.parse((await send(secondAddress,{path:connectionPath+'disconnect',body:disconnectBody}).response).body).receipt,disconnectReceipt);
+  const receiptBody=new URLSearchParams({operation_id:disconnectReceipt.operationId}).toString();
+  assert.deepEqual(JSON.parse((await send(secondAddress,{path:connectionPath+'receipt',body:receiptBody}).response).body).receipt,disconnectReceipt);
+  const afterDisconnect=JSON.parse((await send(secondAddress,{path:connectionPath+'inspect',body:''}).response).body);
+  assert.equal(afterDisconnect.connection,null);assert.equal(afterDisconnect.pendingRevocation,true);
+  for(const secret of [CLIENT,ACCESS,REFRESH,reference,connection.access_token_ref,connection.refresh_token_ref])
+    assert.equal(disconnected.body.includes(secret),false);
+  assert.equal(await vault.get(org,connection.access_token_ref,{...scope,purpose:'oauth_access_token'}),ACCESS);
+  console.log('Actual Gateway session/permission -> HTTPS restricted HTTP role connection inspect/disconnect/immutable receipt replay and deferred token cleanup passed');
   permitted = false;
   assert.equal((await send(secondAddress, { body: 'client_id=runtime-client' }).response).status, 403);
   const before = gateway.seen.length;

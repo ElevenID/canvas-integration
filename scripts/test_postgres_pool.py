@@ -57,6 +57,7 @@ def main():
             sql((ROOT/'schema/005_initial_oauth_custody.sql').read_text())
             sql((ROOT/'schema/006_secret_lock_privilege.sql').read_text())
             sql((ROOT/'schema/007_oauth_attempt_recovery.sql').read_text())
+            sql((ROOT/'schema/008_connection_administration.sql').read_text(encoding='utf-8'))
             sql("""CREATE ROLE canvas_runtime LOGIN PASSWORD 'synthetic-driver-runtime';
                 GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_runtime;
                 GRANT USAGE ON SCHEMA canvas_connector TO canvas_runtime;
