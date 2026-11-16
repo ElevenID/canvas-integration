@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,readFile,rename,rm,mkdir,symlink} from 'node:fs/promises';
-import {join} from 'node:path';
+import {join,resolve,dirname,basename} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -11,7 +11,9 @@ import {createConnectorGatewayApiKeyFile} from '../src/file-credentials.mjs';
 const run=promisify(execFile),posix=process.platform!=='win32';
 const denied={message:'connector_worker_configuration_unavailable'},FILE_KEY='synthetic_gateway_organization_key_000001';
 async function fixture(t) {
-  const dir=await mkdtemp(join(tmpdir(),'canvas-worker-config-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  const dir=resolve(await mkdtemp(join(tmpdir(),'canvas-worker-config-')));t.after(async()=>{
+    assert.equal(dirname(dir),resolve(tmpdir()));assert.ok(basename(dir).startsWith('canvas-worker-config-'));await rm(dir,{recursive:true,force:true});
+  });
   const paths={};for(const [name,value] of Object.entries({password:'database-only',token:'synthetic_bao_token_000001',api:FILE_KEY,ca:'synthetic-public-ca'})) {
     paths[name]=join(dir,name);await writeFile(paths[name],value+'\n',{mode:0o600});
   }
@@ -38,6 +40,17 @@ test('private worker config binds distinct custody, maps CA and refresh slots wi
   await writeFile(f.paths.api+'.next','synthetic_gateway_rotated_key_000001\n',{mode:0o600});await rename(f.paths.api+'.next',f.paths.api);
   assert.equal(await value.producers[0].apiKeyProvider.getApiKey(),'synthetic_gateway_rotated_key_000001');
 });
+test('private capture schedule policies match an explicitly configured producer and reject ambiguous identities',{skip:!posix},async t=>{
+  const f=await fixture(t),schedule={organizationId:'org',producerRef:'producer',routeId:'route',configurationId:'10000000-0000-4000-8000-000000000001',expectedRevision:0,routeVersion:1,intervalMs:60000,enabled:true};
+  f.configuration.captureSchedules=[schedule];await f.save();
+  assert.deepEqual((await loadConnectorWorkerConfiguration({path:f.path})).captureSchedules,[schedule]);
+  for(const change of [v=>v.captureSchedules=null,v=>v.captureSchedules[0].organizationId='other',v=>v.captureSchedules[0].producerRef='other',
+    v=>v.captureSchedules[0].apiKey='forbidden',v=>v.captureSchedules[0].intervalMs=0,
+    v=>v.captureSchedules.push({...v.captureSchedules[0]}),v=>v.captureSchedules.push({...v.captureSchedules[0],routeId:'other-route'})]) {
+    const value=structuredClone(f.configuration);change(value);await f.save(value);await assert.rejects(loadConnectorWorkerConfiguration({path:f.path}),denied);
+  }
+});
+
 test('worker config rejects raw credentials, unknown fields, malformed targets and unbounded slots',{skip:!posix},async t=>{
   const f=await fixture(t),copy=()=>JSON.parse(JSON.stringify(f.configuration));
   for(const mutate of [v=>{v.database.password='raw';},v=>{v.keyCustody.token='raw';},v=>{v.producers[0].apiKey='raw';},

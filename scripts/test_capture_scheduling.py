@@ -17,12 +17,12 @@ def main():
   '--env','POSTGRES_PASSWORD=synthetic-only',IMAGE],check=True)
  try:
   def sql(statement,role=False):
-   result=subprocess.run(['docker','exec','-i',name,'psql','-X','-q','-A','-t','-U','postgres','-v','ON_ERROR_STOP=1'],
+   result=subprocess.run(['docker','exec','-i',name,'psql','-X','-q','-A','-t','-h','127.0.0.1','-U','postgres','-v','ON_ERROR_STOP=1'],
     input=('SET ROLE capture_schedule_runtime; ' if role else '')+statement,text=True,capture_output=True)
    if result.returncode:raise RuntimeError('owned schedule SQL contract failed: '+result.stderr)
    return result.stdout.strip()
   for _ in range(60):
-   if subprocess.run(['docker','exec',name,'pg_isready','-U','postgres'],capture_output=True).returncode==0:break
+   if subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','postgres'],capture_output=True).returncode==0:break
    time.sleep(.25)
   else:raise RuntimeError('owned schedule PostgreSQL readiness failed')
   for migration in sorted((ROOT/'schema').glob('*.sql')):sql(migration.read_text(encoding='utf-8'))
@@ -45,8 +45,8 @@ def main():
    INSERT INTO canvas_connector.rest_capture_routes(organization_id,id,producer_ref,platform_id,binding_id,binding_revision,requirement,claim_names,effective_time_policy,enabled)
     VALUES('schedule-org','route','producer','platform','binding',1,'{"factType":"canvas.course_completion","courseId":"17","userId":"29"}',ARRAY['completed'],'as_of_read',true);""")
   config=str(uuid.uuid4())
-  def tick(configuration=config,expected=0,version=1,cadence=1000,enabled=True,org='schedule-org',producer='producer'):
-   value=sql(f"SELECT canvas_connector.tick_rest_capture_schedule('{org}','{producer}','route','{configuration}',{expected},{version},{cadence},{str(enabled).lower()});",True)
+  def tick(configuration=config,expected=0,version=1,cadence=1000,enabled=True,org='schedule-org',producer='producer',route='route'):
+   value=sql(f"SELECT canvas_connector.tick_rest_capture_schedule('{org}','{producer}','{route}','{configuration}',{expected},{version},{cadence},{str(enabled).lower()});",True)
    return json.loads(value) if value else None
   with ThreadPoolExecutor(max_workers=8) as workers:results=list(workers.map(lambda _:tick(),range(8)))
   assert sum(value['enqueued'] for value in results)==1,results
@@ -76,6 +76,28 @@ def main():
   disabled=tick(configuration=str(uuid.uuid4()),expected=1,enabled=False)
   assert disabled['configuration']['revision']==2 and disabled['reason']=='disabled'
   old=tick();assert not old['current'] and old['reason']=='superseded' and old['configuration']==first['configuration']
+  for scenario,table,timing,body in [
+   ('audit','rest_schedule_captures','INSERT',"RAISE EXCEPTION 'synthetic schedule audit failure';"),
+   ('job','rest_capture_jobs','INSERT',"NEW.requirement:=jsonb_set(NEW.requirement,'{userId}','\"999\"');RETURN NEW;"),
+   ('cursor','rest_schedule_heads','UPDATE',"NEW.next_ordinal:=NEW.next_ordinal+1;RETURN NEW;"),
+   ('timestamp','rest_schedule_configurations','INSERT',"NEW.created_at:='2000-01-01'::timestamptz;RETURN NEW;"),
+   ('expiry','rest_schedule_captures','INSERT',"PERFORM pg_sleep(2.2);RETURN NEW;"),
+  ]:
+   route='rollback-'+scenario;operation=str(uuid.uuid4())
+   sql(f"""INSERT INTO canvas_connector.rest_capture_routes(organization_id,id,producer_ref,platform_id,binding_id,binding_revision,requirement,claim_names,effective_time_policy,enabled)
+    VALUES('schedule-org','{route}','producer','platform','binding-{scenario}',1,'{{"factType":"canvas.course_completion","courseId":"17","userId":"29"}}',ARRAY['completed'],'as_of_read',true);
+    CREATE FUNCTION canvas_connector.test_schedule_fault() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN {body} END;$$;
+    CREATE TRIGGER zz_schedule_fault BEFORE {timing} ON canvas_connector.{table} FOR EACH ROW EXECUTE FUNCTION canvas_connector.test_schedule_fault();""")
+   if scenario=='expiry':sql("UPDATE canvas_connector.connections SET token_expires_at=clock_timestamp()+interval '2 seconds' WHERE organization_id='schedule-org';")
+   try:
+    try:tick(configuration=operation,route=route);raise AssertionError('schedule mutation/expiry did not roll back: '+scenario)
+    except RuntimeError:pass
+   finally:
+    sql(f'DROP TRIGGER zz_schedule_fault ON canvas_connector.{table};DROP FUNCTION canvas_connector.test_schedule_fault();')
+    if scenario=='expiry':sql("UPDATE canvas_connector.connections SET token_expires_at=NULL WHERE organization_id='schedule-org';")
+   assert sql(f"SELECT count(*) FROM canvas_connector.rest_capture_jobs WHERE route_id='{route}';")=='0'
+   assert sql(f"SELECT count(*) FROM canvas_connector.rest_schedule_heads WHERE route_id='{route}';")=='0'
+   assert sql(f"SELECT count(*) FROM canvas_connector.rest_schedule_configurations WHERE configuration_id='{operation}';")=='0'
   for statement in ['DELETE FROM canvas_connector.rest_schedule_heads;','UPDATE canvas_connector.rest_schedule_captures SET receipt=\'{}\';',
     'DELETE FROM canvas_connector.rest_schedule_configurations;','SELECT * FROM canvas_connector.secrets;']:
    try:sql(statement,True);raise AssertionError('forbidden scheduler privilege succeeded')

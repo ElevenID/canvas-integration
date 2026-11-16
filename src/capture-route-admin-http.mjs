@@ -67,7 +67,8 @@ export function createCaptureRouteAdminHandler({store,readBinding,authenticateAn
       }
       if(action==='inspect') return finish(200,{route:await store.inspect(scope)});
       if(action==='capture') {
-        if(!uuid(fields.capture_id)) return finish(400);return finish(200,{capture:await store.capture({...scope,captureId:fields.capture_id})});
+        if(typeof fields.capture_id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(fields.capture_id)) return finish(400);
+        return finish(200,{capture:await store.capture({...scope,captureId:fields.capture_id})});
       }
       if(!uuid(fields.operation_id)) return finish(400);
       if(action==='receipt') return finish(200,{receipt:await store.receipt({...scope,operationId:fields.operation_id})});

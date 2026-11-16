@@ -7,7 +7,7 @@ import {createCaptureScheduler,preflightCaptureScheduler} from '../src/capture-s
 const container=process.argv[2];assert.match(container??'',/^canvas-capture-schedule-[a-f0-9]{32}$/);
 const run=promisify(execFile),quote=value=>value===null?'NULL':typeof value==='number'||typeof value==='boolean'?String(value):"'"+String(value).replaceAll("'","''")+"'";
 async function sql(statement,role=false) {
- const {stdout}=await run('docker',['exec',container,'psql','-X','-q','-A','-t','-U','postgres','-v','ON_ERROR_STOP=1','-c',
+ const {stdout}=await run('docker',['exec',container,'psql','-X','-q','-A','-t','-h','127.0.0.1','-U','postgres','-v','ON_ERROR_STOP=1','-c',
   (role?'SET ROLE capture_schedule_runtime; ':'')+statement]);return stdout.trim();
 }
 let loseReply=false,queries=0;

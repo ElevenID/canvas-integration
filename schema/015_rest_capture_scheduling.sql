@@ -155,7 +155,8 @@ BEGIN
   created:=true;
  END IF;
  IF NOT EXISTS(SELECT 1 FROM canvas_connector.rest_schedule_configurations a WHERE a.organization_id=org AND a.configuration_id=configuration
-    AND a.producer_ref=producer AND a.route_id=route AND a.intent=requested_intent AND a.receipt=config_receipt)
+    AND a.producer_ref=producer AND a.route_id=route AND a.intent=requested_intent AND a.receipt=config_receipt
+    AND (prior.configuration_id IS NOT NULL OR (a.created_at>=started AND a.created_at<=clock_timestamp())))
   OR NOT EXISTS(SELECT 1 FROM canvas_connector.rest_schedule_heads h WHERE to_jsonb(h)=to_jsonb(head))
   OR NOT EXISTS(SELECT 1 FROM canvas_connector.rest_capture_routes r WHERE to_jsonb(r)=to_jsonb(source))
   OR NOT EXISTS(SELECT 1 FROM canvas_connector.platforms p WHERE to_jsonb(p)=to_jsonb(host))

@@ -40,6 +40,7 @@ export async function createConnectorWorkerRuntime(configuration) {
       || new Set(slots.map(v=>v.organizationId+':'+v.producerRef)).size!==slots.length) throw unavailable();
     const schedules=captureSchedules.map(value=>prepareCaptureSchedule(value));
     if(new Set(schedules.map(v=>v.organizationId+':'+v.routeId)).size!==schedules.length
+      || new Set(schedules.map(v=>v.organizationId+':'+v.configurationId)).size!==schedules.length
       || schedules.some(schedule=>!slots.some(slot=>slot.organizationId===schedule.organizationId&&slot.producerRef===schedule.producerRef)))throw unavailable();
     const keyProvider=createOpenBaoKeyProvider(keyCustody),provider=createCanvasOAuthProvider(canvas);
     pool=createConnectorPostgresPool(database);

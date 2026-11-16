@@ -27,5 +27,6 @@
     "producerRef": "configured-producer",
     "apiKeyFile": "/run/credentials/canvas-workers/gateway-organization-key"
   }],
+  "captureSchedules": [],
   "pollIntervalMs": 1000
 }

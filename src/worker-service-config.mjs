@@ -34,6 +34,7 @@ export async function loadConnectorWorkerConfiguration(options={}) {
     if(!Array.isArray(schedules)||schedules.length>32)throw unavailable();
     const captureSchedules=schedules.map(value=>prepareCaptureSchedule(value));
     if(new Set(captureSchedules.map(v=>v.organizationId+':'+v.routeId)).size!==captureSchedules.length
+     || new Set(captureSchedules.map(v=>v.organizationId+':'+v.configurationId)).size!==captureSchedules.length
      || captureSchedules.some(value=>!producers.some(slot=>slot.organizationId===value.organizationId&&slot.producerRef===value.producerRef)))throw unavailable();
     const files=[{path,scope:'configuration'}, {path:database.passwordFile,scope:'database'},
       {path:keyCustody.tokenFile,scope:'openbao'},...producers.map(slot=>({path:slot.apiKeyFile,scope:'gateway:'+slot.organizationId}))];
