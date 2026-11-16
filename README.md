@@ -128,6 +128,10 @@ callback. The [operator recovery API](docs/OAUTH_ATTEMPT_RECOVERY.md) adds bound
 inspection, immutable operation receipts and staged-token revocation disposition.
 Operator UI, unknown-provider resolution and production qualification remain required.
 
+The [connection administration API](docs/CONNECTION_ADMINISTRATION.md) provides
+Gateway-authorized status, generation/revision-fenced disconnect and durable
+operation receipts. Provider revocation and token cleanup remain worker operations.
+
 The separate [worker process](docs/WORKER_SERVICE.md) composes refresh, revocation,
 REST capture and public Gateway delivery with serialized polling, private-file
 credential interfaces and graceful drain. It uses its own connector database role.

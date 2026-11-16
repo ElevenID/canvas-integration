@@ -3,6 +3,7 @@ import { createServer } from 'node:https';
 import { createOAuthAdminHandler } from './oauth-admin-http.mjs';
 import { createOAuthCallbackHandler } from './oauth-callback-http.mjs';
 import { createOAuthAttemptRecoveryHandler } from './oauth-attempt-recovery.mjs';
+import { createConnectionAdminHandler } from './connection-admin.mjs';
 
 const invalid = () => new Error('invalid_connector_service_configuration');
 const unavailable = () => new Error('connector_service_unavailable');
@@ -15,7 +16,7 @@ const pem = value => (typeof value === 'string' || Buffer.isBuffer(value))
 export function createConnectorHttpsService(configuration = {}) {
   if (typeof globalThis.window !== 'undefined' || !record(configuration)
       || Object.keys(configuration).some(key => !['publicOrigin', 'completionUrl', 'tls',
-        'host', 'port', 'maxConcurrentRequests', 'lifecycle', 'authenticateAndAuthorize', 'rateLimiter','recoveryStore'].includes(key))) throw invalid();
+        'host', 'port', 'maxConcurrentRequests', 'lifecycle', 'authenticateAndAuthorize', 'rateLimiter','recoveryStore','connectionStore'].includes(key))) throw invalid();
   const { publicOrigin, completionUrl, tls, lifecycle, authenticateAndAuthorize, rateLimiter,
     host = '127.0.0.1', port = 8443, maxConcurrentRequests = 8 } = configuration;
   let origin;
@@ -26,11 +27,13 @@ export function createConnectorHttpsService(configuration = {}) {
       || !Number.isInteger(maxConcurrentRequests) || maxConcurrentRequests < 1 || maxConcurrentRequests > 32
       || !record(tls) || Object.keys(tls).sort().join(',') !== 'cert,key'
       || !pem(tls.cert) || !pem(tls.key)) throw invalid();
-  let admin, callback, recovery, server;
+  let admin, callback, recovery, connections, server;
   try {
     admin = createOAuthAdminHandler({ lifecycle, authenticateAndAuthorize, rateLimiter, adminOrigin: publicOrigin });
     callback = createOAuthCallbackHandler({ lifecycle, rateLimiter, completionUrl });
     if(configuration.recoveryStore!==undefined) recovery=createOAuthAttemptRecoveryHandler({store:configuration.recoveryStore,
+      authenticateAndAuthorize,rateLimiter,adminOrigin:publicOrigin});
+    if(configuration.connectionStore!==undefined) connections=createConnectionAdminHandler({store:configuration.connectionStore,
       authenticateAndAuthorize,rateLimiter,adminOrigin:publicOrigin});
     server = createServer({ key: tls.key, cert: tls.cert, minVersion: 'TLSv1.2',
       handshakeTimeout: 5000, maxHeaderSize: 16384, headersTimeout: 10000,
@@ -50,6 +53,7 @@ export function createConnectorHttpsService(configuration = {}) {
     if (request.url === '/oauth/callback' || request.url.startsWith('/oauth/callback?')) return callback(request, response);
     if (/^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/oauth\/start$/.test(request.url)) return admin(request, response);
     if(recovery && /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/oauth\/attempts\/(inspect|receipt|recover)$/.test(request.url)) return recovery(request,response);
+    if(connections && /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/connection\/(inspect|receipt|disconnect)$/.test(request.url)) return connections(request,response);
     return finish(response, 404);
   }
   function incoming(request, response) {
