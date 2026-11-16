@@ -131,19 +131,26 @@ RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog AS $$
 DECLARE definition canvas_connector.lti_registrations; host canvas_connector.platforms;
  saved canvas_connector.lti_launch_states; started timestamptz:=clock_timestamp();expected_snapshot jsonb;
 BEGIN
+ IF registration IS NULL OR expected_platform IS NULL OR expected_registration IS NULL
+  OR expected_platform NOT BETWEEN 1 AND 9007199254740991 OR expected_registration NOT BETWEEN 1 AND 9007199254740991
+  OR requested_state IS NULL OR requested_state !~ '^[a-f0-9]{64}$'
+  OR requested_browser IS NULL OR requested_browser !~ '^[a-f0-9]{64}$'
+  OR requested_nonce IS NULL OR requested_nonce !~ '^[A-Za-z0-9_-]{43}$' OR requested_launch IS NULL THEN RETURN NULL; END IF;
  SELECT * INTO definition FROM canvas_connector.lti_registrations WHERE id=registration;
  IF NOT FOUND THEN RETURN NULL; END IF;
  SELECT * INTO host FROM canvas_connector.platforms WHERE organization_id=definition.organization_id AND id=definition.platform_id FOR UPDATE;
  SELECT * INTO definition FROM canvas_connector.lti_registrations WHERE id=registration FOR UPDATE;
- IF NOT host.enabled OR host.archived OR NOT definition.enabled OR host.config_version<>expected_platform
-  OR definition.version<>expected_registration THEN RETURN NULL; END IF;
+ IF host.enabled IS DISTINCT FROM true OR host.archived IS DISTINCT FROM false OR definition.enabled IS DISTINCT FROM true
+  OR host.config_version IS DISTINCT FROM expected_platform OR definition.version IS DISTINCT FROM expected_registration THEN RETURN NULL; END IF;
  expected_snapshot:=jsonb_build_object('canvasOrigin',host.canvas_origin,'trustProfile',definition.trust_profile,
   'environment',definition.environment,'clientId',definition.client_id,'deploymentId',definition.deployment_id,'targetLinkUri',definition.target_link_uri);
  SELECT * INTO saved FROM canvas_connector.lti_launch_states WHERE state_hash=requested_state;
  IF FOUND THEN
-  IF saved.registration_id<>registration OR saved.platform_version<>expected_platform OR saved.registration_version<>expected_registration
-   OR saved.browser_hash<>requested_browser OR saved.nonce<>requested_nonce OR saved.launch_id<>requested_launch
-   OR saved.registration_snapshot<>expected_snapshot OR saved.phase<>'pending' OR saved.expires_at<=clock_timestamp() THEN RETURN NULL; END IF;
+  IF saved.registration_id IS DISTINCT FROM registration OR saved.platform_version IS DISTINCT FROM expected_platform
+   OR saved.registration_version IS DISTINCT FROM expected_registration OR saved.browser_hash IS DISTINCT FROM requested_browser
+   OR saved.nonce IS DISTINCT FROM requested_nonce OR saved.launch_id IS DISTINCT FROM requested_launch
+   OR saved.registration_snapshot IS DISTINCT FROM expected_snapshot OR saved.phase IS DISTINCT FROM 'pending'
+   OR saved.expires_at<=clock_timestamp() THEN RETURN NULL; END IF;
   RETURN to_jsonb(saved);
  END IF;
  INSERT INTO canvas_connector.lti_launch_states(state_hash,launch_id,browser_hash,organization_id,platform_id,registration_id,
@@ -170,7 +177,9 @@ CREATE FUNCTION canvas_connector.stage_lti_launch(requested_state text, requeste
 RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog AS $$
 DECLARE saved canvas_connector.lti_launch_states; definition canvas_connector.lti_registrations; host canvas_connector.platforms;
 BEGIN
- IF requested_token !~ '^[a-f0-9]{64}$' OR requested_token IS NULL THEN RETURN NULL; END IF;
+ IF requested_state IS NULL OR requested_state !~ '^[a-f0-9]{64}$'
+  OR requested_token IS NULL OR requested_token !~ '^[a-f0-9]{64}$'
+  OR jsonb_typeof(payload) IS DISTINCT FROM 'object' THEN RETURN NULL; END IF;
  SELECT * INTO saved FROM canvas_connector.lti_launch_states WHERE state_hash=requested_state;
  IF NOT FOUND THEN RETURN NULL; END IF;
  SELECT * INTO host FROM canvas_connector.platforms WHERE organization_id=saved.organization_id AND id=saved.platform_id FOR UPDATE;
@@ -180,8 +189,8 @@ BEGIN
   IF saved.token_hash=requested_token AND saved.protocol_claims=payload THEN RETURN to_jsonb(saved); END IF;
   RETURN NULL;
  END IF;
- IF NOT host.enabled OR host.archived OR NOT definition.enabled OR host.config_version<>saved.platform_version
-  OR definition.version<>saved.registration_version OR saved.expires_at<=clock_timestamp()
+ IF host.enabled IS DISTINCT FROM true OR host.archived IS DISTINCT FROM false OR definition.enabled IS DISTINCT FROM true
+  OR host.config_version IS DISTINCT FROM saved.platform_version OR definition.version IS DISTINCT FROM saved.registration_version OR saved.expires_at<=clock_timestamp()
   OR NOT canvas_connector.lti_claims_match(payload,definition,host,saved.nonce) THEN RETURN NULL; END IF;
  UPDATE canvas_connector.lti_launch_states SET phase='staged',token_hash=requested_token,protocol_claims=payload
   WHERE state_hash=requested_state;
@@ -205,6 +214,9 @@ RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog AS $$
 DECLARE saved canvas_connector.lti_launch_states; definition canvas_connector.lti_registrations; host canvas_connector.platforms;
  expected_receipt jsonb; accepted timestamptz; audit canvas_connector.lti_launch_receipts;
 BEGIN
+ IF requested_state IS NULL OR requested_state !~ '^[a-f0-9]{64}$'
+  OR requested_browser IS NULL OR requested_browser !~ '^[a-f0-9]{64}$'
+  OR requested_token IS NULL OR requested_token !~ '^[a-f0-9]{64}$' THEN RETURN NULL; END IF;
  SELECT * INTO saved FROM canvas_connector.lti_launch_states WHERE state_hash=requested_state;
  IF NOT FOUND THEN RETURN NULL; END IF;
  SELECT * INTO host FROM canvas_connector.platforms WHERE organization_id=saved.organization_id AND id=saved.platform_id FOR UPDATE;
@@ -217,8 +229,8 @@ BEGIN
   IF audit.launch_id=saved.launch_id AND audit.token_hash=requested_token THEN RETURN audit.receipt; END IF;
   RAISE EXCEPTION 'LTI launch receipt is unavailable';
  END IF;
- IF NOT host.enabled OR host.archived OR NOT definition.enabled OR host.config_version<>saved.platform_version
-  OR definition.version<>saved.registration_version OR saved.expires_at<=clock_timestamp()
+ IF host.enabled IS DISTINCT FROM true OR host.archived IS DISTINCT FROM false OR definition.enabled IS DISTINCT FROM true
+  OR host.config_version IS DISTINCT FROM saved.platform_version OR definition.version IS DISTINCT FROM saved.registration_version OR saved.expires_at<=clock_timestamp()
   OR NOT canvas_connector.lti_claims_match(saved.protocol_claims,definition,host,saved.nonce) THEN RETURN NULL; END IF;
  accepted:=clock_timestamp();
  expected_receipt:=jsonb_build_object('launchId',saved.launch_id,'registrationId',saved.registration_id,

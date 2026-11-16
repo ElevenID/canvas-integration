@@ -14,6 +14,10 @@ no schema or grants. The prototype tests grant only selected state/receipt write
 registration/platform reads and the limited UPDATE capability PostgreSQL requires
 for row locking. They deny registration configuration writes, state-identity
 rewrites and receipt mutation. Production named roles remain unqualified.
+The role remains trusted application SQL: its selected state/receipt INSERT and
+phase UPDATE grants do not constitute a tenant or JWT-verification sandbox. The
+application verifies provider signatures and Gateway authority; this database
+never grants canonical Marty identity, verification or issuance authority.
 
 The lifecycle reads a trusted registration, requires the unsigned login issuer to
 match its server-selected profile, generates independent random state, nonce and

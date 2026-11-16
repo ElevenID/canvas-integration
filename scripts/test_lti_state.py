@@ -80,8 +80,15 @@ def main():
         state, token_hash = 'a' * 64, 'c' * 64
         saved = json.loads(start(state)); claims = payload(state)
         assert saved['phase'] == 'pending' and saved['organization_id'] == 'org-one'
+        original_args = [f"'{reg}'", '1', '1', f"'{state}'", f"'{browser}'", f"'{challenges[state]}'", f"'{saved['launch_id']}'"]
+        for index in range(len(original_args)):
+            nullable = original_args.copy();nullable[index] = 'NULL'
+            assert not runtime('SELECT canvas_connector.begin_lti_launch(' + ','.join(nullable) + ');'), 'NULL is not an exact original intent'
+        assert json.loads(runtime('SELECT canvas_connector.begin_lti_launch(' + ','.join(original_args) + ');'))['launch_id'] == saved['launch_id']
         assert not confirm(state, token_hash), 'unstaged state must not confirm'
         assert json.loads(stage(state, token_hash, claims))['phase'] == 'staged'
+        assert not runtime(f"SELECT canvas_connector.stage_lti_launch('{state}',NULL,{encoded(claims)});")
+        assert not runtime(f"SELECT canvas_connector.confirm_lti_launch('{state}',NULL,'{token_hash}');")
         assert not confirm(state, token_hash, 'd' * 64), 'wrong browser must not consume'
         assert not confirm(state, 'e' * 64), 'changed token must not consume'
         with ThreadPoolExecutor(max_workers=8) as pool:
