@@ -87,12 +87,12 @@ try {
   assert.equal(await vault.get('driver-org',f.oldRef,scoped),'canvas-synthetic-access-one');
   f.newRef=await vault.put('driver-org',scoped,'canvas-synthetic-access-two');
   assert.equal(await vault.get('driver-org',f.newRef,scoped),'canvas-synthetic-access-two');
-  const records=(await pool.query('SELECT key_id FROM canvas_connector.secrets ORDER BY key_id')).rows;
+  const records=(await pool.query('SELECT key_id FROM canvas_connector.secrets WHERE organization_id=\'driver-org\' ORDER BY key_id')).rows;
   assert.deepEqual(records,[{key_id:'canvas-key-one'},{key_id:'canvas-key-two'}]);await writeFile(file,JSON.stringify(f));
  } else if(stage==='key-denied') {
   await assert.rejects(()=>vault.get('driver-org',f.oldRef,scoped),/connector_vault_unavailable/);
   await assert.rejects(()=>vault.put('driver-org',scoped,'must-not-persist'),/connector_vault_unavailable/);
-  assert.equal((await pool.query('SELECT count(*)::int AS n FROM canvas_connector.secrets')).rows[0].n,2);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM canvas_connector.secrets WHERE organization_id=\'driver-org\'')).rows[0].n,2);
  } else if(stage==='trust-custody') {
   let calls=0;
   const trusted=createConnectorPostgresPool({...configuration,credentialProvider:{getPassword:async()=>{calls++;return 'synthetic-explicit-password';}}});

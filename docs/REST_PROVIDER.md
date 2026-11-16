@@ -9,9 +9,7 @@ The separate Gateway client remains the only connector-to-ElevenID transport.
 
 This is an extracted candidate for the REST part of the old issuance provider,
 not a live worker cutover. It accepts an already obtained Canvas access token.
-OAuth authorization/refresh/revocation, LTI launch verification, AGS/NRPS,
-connector storage, scheduling and public Gateway evidence admission remain
-unimplemented here. Neither client silently falls back to the other's credentials.
+Connector OAuth/storage/refresh/revocation, public observation delivery and durable REST capture now have separate server-only modules; see [REST_CAPTURE.md](REST_CAPTURE.md). Full server/scheduler deployment, LTI launch verification, AGS/NRPS and actual core end-to-end qualification remain unfinished. Neither client silently falls back to the other's credentials.
 
 ## Server-side usage
 
