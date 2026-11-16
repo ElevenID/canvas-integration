@@ -4,6 +4,7 @@ import {readFile,writeFile,rename} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync,spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {setTimeout as pause,setImmediate} from 'node:timers/promises';
 import {createConnectorPostgresPool} from '../src/postgres-pool.mjs';
 import {createPostgresRepository} from '../src/postgres-repository.mjs';
@@ -25,6 +26,8 @@ const keyCustody={openbaoOrigin:f.baoOrigin,mount:'connector-kv',keyPath:'canvas
 const vault=createEncryptedVault({pool,keyProvider:createOpenBaoKeyProvider(keyCustody)});
 const canvas=await httpsFixture(),gateway=await httpsFixture(),runtimes=[];
 const org='scheduled-worker-org',platform='refresh-platform',producer='scheduled-producer';
+const scheduleConfiguration='10000000-0000-4000-8000-000000000015';
+const automaticCapture='schedule_'+createHash('sha256').update(['canvas-rest-capture-v1',org,producer,'worker-route',scheduleConfiguration,'1'].join('\n')).digest('hex');
 const CLIENT='synthetic_worker_canvas_client_secret',OLD='synthetic_worker_old_access_token',OLD_REFRESH='synthetic_worker_old_refresh_token';
 const ACCESS='synthetic_worker_new_access_token',REFRESH='synthetic_worker_new_refresh_token',REVOKE='synthetic_worker_revocation_token';
 const KEY='synthetic_worker_gateway_organization_key_0001',KEY2='synthetic_worker_gateway_organization_key_0002';
@@ -53,7 +56,8 @@ gateway.setHandler(async(req,res)=>{
 });
 const configuration={database:{...database,user:'canvas_scheduled_worker',credentialProvider:{getPassword:async()=> 'synthetic-worker-password'}},keyCustody,
   canvas:{ca:canvas.ca,allowedPrivateAddresses:['127.0.0.1','::1'],timeoutMs:10000},gateway:{gatewayOrigin:gateway.origin,ca:gateway.ca,timeoutMs:10000},
-  refreshTargets:[{organizationId:org,platformId:platform}],producers:[{organizationId:org,producerRef:producer,apiKeyProvider:{getApiKey:async()=>key}}],pollIntervalMs:100};
+  refreshTargets:[{organizationId:org,platformId:platform}],producers:[{organizationId:org,producerRef:producer,apiKeyProvider:{getApiKey:async()=>key}}],pollIntervalMs:100,
+  captureSchedules:[{organizationId:org,producerRef:producer,routeId:'worker-route',configurationId:scheduleConfiguration,expectedRevision:0,routeVersion:1,intervalMs:60000,enabled:true}]};
 const posix=process.platform!=='win32',workerFile=join(directory,'worker-private.json'),apiFile=join(directory,'worker-gateway-key');
 async function privateFile(path,value) {await writeFile(path+'.next',value,{mode:0o600});await rename(path+'.next',path);}
 async function until(probe) {
@@ -108,7 +112,16 @@ try {
       canvas_connector.seal_observation(text,text,text,text),canvas_connector.claim_observation(text,text),
       canvas_connector.acknowledge_observation(text,text,text,uuid,text,boolean),canvas_connector.defer_observation(text,text,text,uuid,text,integer,boolean) TO canvas_scheduled_worker;`);
   const missing=await createConnectorWorkerRuntime(configuration);await assert.rejects(missing.start(),{message:'connector_worker_runtime_unavailable'});
-  owner('GRANT UPDATE(id) ON canvas_connector.platforms TO canvas_scheduled_worker;');
+  owner(`GRANT UPDATE(id) ON canvas_connector.platforms TO canvas_scheduled_worker;
+    GRANT SELECT,INSERT ON canvas_connector.rest_schedule_heads,canvas_connector.rest_schedule_configurations,canvas_connector.rest_schedule_captures TO canvas_scheduled_worker;
+    GRANT UPDATE(configuration_id,revision,route_version,interval_ms,enabled,next_ordinal,next_due_at,last_capture_id,updated_at)
+      ON canvas_connector.rest_schedule_heads TO canvas_scheduled_worker;
+    GRANT INSERT(organization_id,capture_id,producer_ref,route_id,route_version,platform_id,binding_id,binding_revision,requirement,claim_names,effective_time_policy,available_at)
+      ON canvas_connector.rest_capture_jobs TO canvas_scheduled_worker;
+    GRANT EXECUTE ON FUNCTION canvas_connector.tick_rest_capture_schedule(text,text,text,uuid,bigint,bigint,integer,boolean) TO canvas_scheduled_worker;`);
+  owner('REVOKE EXECUTE ON FUNCTION canvas_connector.tick_rest_capture_schedule(text,text,text,uuid,bigint,bigint,integer,boolean) FROM canvas_scheduled_worker;');
+  try {const unavailable=await createConnectorWorkerRuntime(configuration);await assert.rejects(unavailable.start(),{message:'connector_worker_runtime_unavailable'});}
+  finally {owner('GRANT EXECUTE ON FUNCTION canvas_connector.tick_rest_capture_schedule(text,text,text,uuid,bigint,bigint,integer,boolean) TO canvas_scheduled_worker;');}
   const limited=createConnectorPostgresPool(configuration.database);
   try {
     for(const sql of ["UPDATE canvas_connector.platforms SET enabled=true","UPDATE canvas_connector.rest_capture_routes SET enabled=true",
@@ -125,7 +138,7 @@ try {
   await pool.query(`INSERT INTO canvas_connector.rest_capture_routes(organization_id,id,producer_ref,platform_id,binding_id,binding_revision,requirement,claim_names,effective_time_policy,enabled)
     VALUES($1,'worker-route',$2,$3,'worker-binding',1,$4::jsonb,$5,'as_of_read',true)`,[org,producer,platform,JSON.stringify({factType:'canvas.course_completion',courseId:'17',userId:'29'}),['completed','requirement_count','requirement_completed_count']]);
   const captures=createRestCaptureRepository(pool),outbox=createObservationOutbox(pool);
-  await captures.schedule(org,producer,'worker-route','worker-capture');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM canvas_connector.rest_schedule_configurations WHERE organization_id=$1',[org])).rows[0].n,0);
   await outbox.enqueue('other-worker-org','unconfigured-producer',{binding_id:'foreign-binding',binding_revision:1,observation_id:'foreign-worker-item',observed_at_ms:1794804000000,effective_at_ms:1794804000000,claims:{completed:false}});
   if(posix) {
     const password=join(directory,'worker-password'),token=join(directory,'worker-bao-token'),ca=join(directory,'worker-db-ca'),baoCa=join(directory,'worker-bao-ca'),canvasCa=join(directory,'worker-canvas-ca'),gatewayCa=join(directory,'worker-gateway-ca');
@@ -134,21 +147,22 @@ try {
     await privateFile(workerFile,JSON.stringify({schemaVersion:1,database:{...db,passwordFile:password,caFile:ca},
       keyCustody:{openbaoOrigin:f.baoOrigin,mount:'connector-kv',keyPath:'canvas-envelope',keyNamespace:'canvas',tokenFile:token,caFile:baoCa},
       canvas:{caFile:canvasCa,allowedPrivateAddresses:['127.0.0.1','::1'],timeoutMs:10000},gateway:{gatewayOrigin:gateway.origin,caFile:gatewayCa,timeoutMs:10000},
-      refreshTargets:configuration.refreshTargets,producers:[{organizationId:org,producerRef:producer,apiKeyFile:apiFile}],pollIntervalMs:100}));
+      refreshTargets:configuration.refreshTargets,producers:[{organizationId:org,producerRef:producer,apiKeyFile:apiFile}],pollIntervalMs:100,captureSchedules:configuration.captureSchedules}));
   }
   const first=await start();await refreshing;const refreshDrain=await first.drain();assert.equal(refreshes,1);releaseRefresh();await refreshDrain.work;
   assert.equal((await pool.query('SELECT phase FROM canvas_connector.refresh_attempts WHERE organization_id=$1',[org])).rows[0].phase,'published');
-  assert.equal((await pool.query('SELECT phase FROM canvas_connector.rest_capture_jobs WHERE organization_id=$1',[org])).rows[0].phase,'pending');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM canvas_connector.rest_capture_jobs WHERE organization_id=$1',[org])).rows[0].n,0);
   assert.equal(await vault.metadata(org,access),null);assert.equal(await vault.metadata(org,refresh),null);assert.equal(await vault.metadata(org,revoke),null);
   const second=await start();
-  await until(async()=>(await pool.query('SELECT phase FROM canvas_connector.observation_outbox WHERE organization_id=$1 AND observation_id=$2',[org,'worker-capture'])).rows[0]?.phase==='acknowledged');
+  await until(async()=>(await pool.query('SELECT phase FROM canvas_connector.observation_outbox WHERE organization_id=$1 AND observation_id=$2',[org,automaticCapture])).rows[0]?.phase==='acknowledged');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM canvas_connector.rest_schedule_captures WHERE organization_id=$1',[org])).rows[0].n,1);
   assert.equal(refreshes,1);assert.equal(revokes,1);assert.equal(reads,1);assert.equal(posts,1);
   key=KEY2;if(posix) await privateFile(apiFile,KEY2);
   await outbox.enqueue(org,producer,{binding_id:'worker-binding',binding_revision:1,observation_id:'worker-drain',observed_at_ms:1794804000000,effective_at_ms:1794804000000,claims:{completed:false}});
   await delivering;const deliveryDrain=await second.drain();releaseDelivery();await deliveryDrain.work;
   assert.equal((await pool.query('SELECT phase FROM canvas_connector.observation_outbox WHERE organization_id=$1 AND observation_id=$2',[org,'worker-drain'])).rows[0].phase,'acknowledged');
   assert.equal(posts,2);assert.equal((await pool.query("SELECT phase FROM canvas_connector.observation_outbox WHERE observation_id='foreign-worker-item'")).rows[0].phase,'pending');
-  console.log('Actual scheduled worker refresh/revocation/capture/Gateway delivery, restricted role, scope and drain/restart contracts passed');
+  console.log('Actual automatic cadence -> capture -> Gateway delivery with immutable schedule receipt, restricted role, refresh/revocation, scope and drain/restart contracts passed');
   if(posix) console.log('Actual standalone POSIX worker CLI private configuration, fresh Gateway file rotation and SIGTERM drain during refresh and delivery passed');
   else console.log('Windows physical worker runtime passed with explicit synthetic providers; POSIX worker CLI/files require Linux qualification');
 } finally {

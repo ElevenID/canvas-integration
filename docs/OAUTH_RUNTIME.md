@@ -11,7 +11,8 @@ Omitting it leaves both LTI route families disabled. Its network allowlist and C
 are separate from the OAuth provider configuration; no platform-supplied URLs or
 replacement verification hooks are accepted.
 A separate worker service performs capture, delivery, refresh and revocation;
-automatic capture scheduling remains unfinished.
+explicit [automatic capture scheduling](CAPTURE_SCHEDULING.md) is configured in
+that separate private worker process.
 
 ```js
 import { createConnectorOAuthRuntime } from '@elevenid/canvas-integration/connector-oauth-runtime';

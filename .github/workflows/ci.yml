@@ -77,6 +77,8 @@ jobs:
       - run: npm ci --ignore-scripts --omit=optional --no-audit --no-fund
       - name: Test real TLS database, keys, vault, Canvas capture and Gateway delivery
         run: python3 scripts/test_postgres_pool.py
+      - name: Test durable automatic capture cadence and backpressure
+        run: python3 scripts/test_capture_scheduling.py
   key-custody:
     name: Connector OpenBao key provider contract
     runs-on: ubuntu-latest

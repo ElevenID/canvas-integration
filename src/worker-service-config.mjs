@@ -3,6 +3,7 @@ import {resolve,isAbsolute} from 'node:path';
 import {parsePrivateJson} from './private-json.mjs';
 import {createPrivateTextFile} from './private-file.mjs';
 import {createConnectorDatabasePasswordFile,createConnectorOpenBaoTokenFile,createConnectorGatewayApiKeyFile} from './file-credentials.mjs';
+import {prepareCaptureSchedule} from './capture-scheduler.mjs';
 const unavailable=()=>new Error('connector_worker_configuration_unavailable');
 const id=value=>typeof value==='string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
 function fields(value,allowed) {
@@ -14,7 +15,7 @@ export async function loadConnectorWorkerConfiguration(options={}) {
     const {path,signal,timeoutMs=1000}=options;
     const read=filename=>createPrivateTextFile({path:filename,timeoutMs,maxBytes:65536}).readText({signal});
     const configuration=parsePrivateJson(await read(path));
-    fields(configuration,['schemaVersion','database','keyCustody','canvas','gateway','refreshTargets','producers','pollIntervalMs']);
+    fields(configuration,['schemaVersion','database','keyCustody','canvas','gateway','refreshTargets','producers','pollIntervalMs','captureSchedules']);
     if(configuration.schemaVersion!==1) throw unavailable();
     const {database,keyCustody,canvas,gateway,refreshTargets,producers,pollIntervalMs}=configuration;
     fields(database,['host','port','database','user','caFile','passwordFile','maxConnections','connectTimeoutMs','queryTimeoutMs']);
@@ -29,6 +30,12 @@ export async function loadConnectorWorkerConfiguration(options={}) {
       fields(slot,['organizationId','producerRef','apiKeyFile']);
       if(!id(slot.organizationId)||!id(slot.producerRef)) throw unavailable();
     }
+    const schedules=configuration.captureSchedules===undefined?[]:configuration.captureSchedules;
+    if(!Array.isArray(schedules)||schedules.length>32)throw unavailable();
+    const captureSchedules=schedules.map(value=>prepareCaptureSchedule(value));
+    if(new Set(captureSchedules.map(v=>v.organizationId+':'+v.routeId)).size!==captureSchedules.length
+     || new Set(captureSchedules.map(v=>v.organizationId+':'+v.configurationId)).size!==captureSchedules.length
+     || captureSchedules.some(value=>!producers.some(slot=>slot.organizationId===value.organizationId&&slot.producerRef===value.producerRef)))throw unavailable();
     const files=[{path,scope:'configuration'}, {path:database.passwordFile,scope:'database'},
       {path:keyCustody.tokenFile,scope:'openbao'},...producers.map(slot=>({path:slot.apiKeyFile,scope:'gateway:'+slot.organizationId}))];
     const paths=new Map(),inodes=new Map(),identities=[];
@@ -57,6 +64,7 @@ export async function loadConnectorWorkerConfiguration(options={}) {
       producers:producers.map((slot,index)=>({organizationId:slot.organizationId,producerRef:slot.producerRef,
         apiKeyProvider:createConnectorGatewayApiKeyFile({path:identities[index+3].path,timeoutMs})})),
       ...(pollIntervalMs===undefined?{}:{pollIntervalMs}),
+      ...(configuration.captureSchedules===undefined?{}:{captureSchedules}),
     };
   } catch {throw unavailable();}
 }

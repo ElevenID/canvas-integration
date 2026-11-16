@@ -96,7 +96,7 @@ export function createCaptureRouteAdminStore(pool) {
         || result.version!==(value.action==='create'?1:value.expectedRouteVersion+(value.action==='schedule'?0:1))) throw unavailable();return result;
     },
     async capture(value) {
-      scope(value);if(!uuid(value.captureId)) throw unavailable();
+      scope(value);if(typeof value.captureId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(value.captureId)) throw unavailable();
       const result=await execute(`SELECT (SELECT jsonb_build_object('captureId',j.capture_id,'routeId',j.route_id,'routeVersion',j.route_version,
         'phase',j.phase,'attempts',j.attempts,'availableAtMs',floor(extract(epoch FROM j.available_at)*1000)::bigint,'lastError',j.last_error)
         FROM canvas_connector.rest_capture_jobs j JOIN canvas_connector.rest_capture_routes r ON r.organization_id=j.organization_id AND r.id=j.route_id

@@ -40,6 +40,14 @@ test('create and schedule use derived tenant/actor, own platform and fresh canon
   const scheduled=await f.send('schedule',current);assert.equal(scheduled.status,200);assert.equal(JSON.parse(scheduled.body).receipt.captureId,operationId);
   assert.ok(f.calls.some(c=>c.method==='inspect'));
 });
+test('authenticated capture inspection accepts automatic opaque IDs while write operations remain UUID-bound',async t=>{
+  const f=await fixture(t),captureId='schedule_'+'a'.repeat(64);
+  assert.equal((await f.send('capture',{capture_id:captureId})).status,200);
+  assert.deepEqual(f.calls.at(-1).value,{organizationId:'org',platformId:'platform',routeId:'route',captureId});
+  for(const value of ['../other','with space','a'.repeat(129)])assert.equal((await f.send('capture',{capture_id:value})).status,400);
+  assert.equal((await f.send('schedule',{...current,operation_id:captureId})).status,400);
+});
+
 test('operator auth, Origin, format, rate and HTTP method deny before storage',async t=>{
   for(const [options,status] of [[{authenticate:async()=>null},401],[{authenticate:async()=>({...identity,authorized:false})},403],[{limit:async()=>false},429]]) {
     const f=await fixture(t,options);assert.equal((await f.send('create',create)).status,status);assert.equal(f.calls.length,0);

@@ -29,7 +29,8 @@ writes by the trusted owner/agent. CA files are loaded once; live CA rotation is
 not implemented. No credential is read from ambient service environment variables.
 
 One revocation task, up to 32 configured refresh targets and up to 32 configured
-producer slots form a fixed round-robin schedule. Each producer has capture and
+producer slots and up to 32 explicit capture-schedule policies form a fixed
+round-robin schedule, bounded at 129 tasks. Each producer has capture and
 delivery tasks. The loop admits one actual adapter operation at a time, waits for
 settlement and then delays `pollIntervalMs` (100–60000, default 1000). There is no
 overlapping interval, backlog of timer callbacks, immediate retry or raw-error log.
@@ -41,8 +42,10 @@ Refresh targets restrict refresh selection, and producer slots restrict capture
 and delivery. **Revocation is database-wide:** it claims ready jobs from the
 connector database independently of those lists. Only use a database/login whose
 entire revocation queue this process is authorized to operate. Multiple processes
-still use database lease/fencing rules. Polling does not create capture jobs,
-platforms, bindings or schedules; owner/operator workflows must enqueue them.
+still use database lease/fencing rules. By default, polling only consumes already
+queued captures. Explicit [capture-schedule policies](CAPTURE_SCHEDULING.md) can
+allocate captures with durable configuration CAS, cadence and backpressure.
+They create no platform, Core binding or grant.
 Large schedules or slow providers delay revisit times. Configure shards and
 provider/lease budgets for the required refresh and cleanup latency; this loop
 does not promise fairness between organizations or automatic scaling.
@@ -57,9 +60,10 @@ durable uncertain work; it never authorizes repeating an OAuth exchange.
 Startup checks selected table/function privileges and row-lock capabilities and
 reads the current connector encryption key before scheduling. It performs no
 DDL, grants, queue claims or provider calls before that preflight succeeds.
-Full installation uses owner migrations 001–010; revocation uses 001, refresh
+Full installation includes the owner migrations for enabled features; revocation uses 001, refresh
 also requires the secret timestamp lock guard 006, and capture/delivery use 002–003.
 The HTTP process also requires connection and platform administration migrations.
+Automatic cadence additionally requires 015 and selected schedule/job grants.
 
 The physical synthetic worker role has only selected connector tables/functions,
 token-column updates and immutable-ID/timestamp row-lock grants. It cannot create

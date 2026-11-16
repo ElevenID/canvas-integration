@@ -131,5 +131,6 @@ binding/Origin and capability checks, scoped history, concurrent replay, rollbac
 late expiry, BEFORE-trigger corruption, uncertain replies and private-column
 denial. POSIX CLI, exact frozen-candidate CI, production grants, deployed real Core,
 Canvas authorization and end-to-end OB3/wallet/network qualification remain distinct
-gates. Operator UI, automatic capture scheduling and recovery/retention automation
-remain unfinished.
+gates. [Automatic capture scheduling](CAPTURE_SCHEDULING.md) is an explicit private
+worker policy; authenticated capture inspection supports its opaque IDs.
+Operator UI and recovery/retention automation remain unfinished.
