@@ -34,6 +34,18 @@ must enqueue revocation in the same transaction. Jobs intentionally survive
 connection deletion. Workers must use lease IDs and compare-and-set completion;
 the schema alone does not execute revocation or refresh tokens.
 
+Use `disconnect(organization, platform)` for atomic connection deletion and
+revocation enqueue; a failed enqueue rolls back the deletion. Repeated or
+cross-tenant disconnects have no effect. `claim_revocation()` uses SKIP LOCKED
+and returns one job with a fresh one-minute lease. Perform the provider call
+only after committing that claim. `finish_revocation(id, lease)` and
+`retry_revocation(id, lease)` require the exact unexpired lease. Retries apply
+exponential backoff capped at one hour. Lease expiry permits reclamation, so
+provider revocation must tolerate repeated execution after uncertain outcomes.
+Vault cleanup must follow confirmed provider revocation; these functions never
+read or delete vault secrets. Provision separate least-privilege worker grants
+for these operations rather than granting arbitrary table updates.
+
 PUBLIC receives no schema, table or function access. Deployment must provision
 distinct migration, administrator and worker roles with reviewed least-privilege
 grants, encrypted transport and connector-only database credentials. No runtime

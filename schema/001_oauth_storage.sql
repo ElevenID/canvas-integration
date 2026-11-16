@@ -128,6 +128,66 @@ CREATE TABLE canvas_connector.revocation_jobs (
 CREATE INDEX revocation_jobs_ready ON canvas_connector.revocation_jobs(available_at)
     WHERE completed_at IS NULL;
 
+-- Disconnect and enqueue are one atomic statement/transaction. Queue insertion
+-- failures roll back deletion, preserving the only durable token reference.
+CREATE FUNCTION canvas_connector.disconnect(requested_org text, requested_platform text)
+RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE connection canvas_connector.connections;
+BEGIN
+    PERFORM 1 FROM canvas_connector.platforms
+     WHERE organization_id = requested_org AND id = requested_platform FOR UPDATE;
+    DELETE FROM canvas_connector.connections
+     WHERE organization_id = requested_org AND platform_id = requested_platform
+     RETURNING * INTO connection;
+    IF NOT FOUND THEN RETURN false; END IF;
+    INSERT INTO canvas_connector.revocation_jobs
+        (organization_id, platform_id, canvas_origin, access_token_ref)
+    VALUES (connection.organization_id, connection.platform_id,
+            connection.canvas_origin, connection.access_token_ref)
+    ON CONFLICT (organization_id, platform_id, access_token_ref) DO NOTHING;
+    RETURN true;
+END;
+$$;
+
+CREATE FUNCTION canvas_connector.claim_revocation()
+RETURNS SETOF canvas_connector.revocation_jobs LANGUAGE sql AS $$
+    WITH candidate AS (
+        SELECT id FROM canvas_connector.revocation_jobs
+         WHERE completed_at IS NULL AND available_at <= clock_timestamp()
+           AND (lease_until IS NULL OR lease_until <= clock_timestamp())
+         ORDER BY available_at, id FOR UPDATE SKIP LOCKED LIMIT 1
+    )
+    UPDATE canvas_connector.revocation_jobs job
+       SET lease_id = gen_random_uuid(), lease_until = clock_timestamp() + interval '1 minute',
+           attempts = attempts + 1
+      FROM candidate WHERE job.id = candidate.id RETURNING job.*;
+$$;
+
+-- An expired worker cannot acknowledge a job reclaimed by another worker.
+CREATE FUNCTION canvas_connector.finish_revocation(requested_id uuid, expected_lease uuid)
+RETURNS boolean LANGUAGE sql AS $$
+    WITH finished AS (
+        UPDATE canvas_connector.revocation_jobs
+           SET completed_at = clock_timestamp(), lease_id = NULL, lease_until = NULL
+         WHERE id = requested_id AND lease_id = expected_lease
+           AND lease_until > clock_timestamp() AND completed_at IS NULL
+        RETURNING id
+    ) SELECT EXISTS(SELECT 1 FROM finished);
+$$;
+
+CREATE FUNCTION canvas_connector.retry_revocation(requested_id uuid, expected_lease uuid)
+RETURNS boolean LANGUAGE sql AS $$
+    WITH retried AS (
+        UPDATE canvas_connector.revocation_jobs
+           SET available_at = clock_timestamp() + interval '1 second' *
+                   least(3600, power(2::numeric, least(attempts, 12)))::double precision,
+               lease_id = NULL, lease_until = NULL
+         WHERE id = requested_id AND lease_id = expected_lease
+           AND lease_until > clock_timestamp() AND completed_at IS NULL
+        RETURNING id
+    ) SELECT EXISTS(SELECT 1 FROM retried);
+$$;
+
 REVOKE ALL ON SCHEMA canvas_connector FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA canvas_connector FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA canvas_connector FROM PUBLIC;
