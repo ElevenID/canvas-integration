@@ -108,3 +108,20 @@ test('server-only configuration rejects alternate transports, expired assertions
   try{assert.throws(()=>createCanvasLtiServiceClient(configuration),/invalid_configuration/);assert.throws(()=>generateLtiToolKey(),/lti_tool_key_unavailable/);}
   finally{delete globalThis.window;}
 });
+
+test('pagination cannot send an expired credential or extend its lifetime by mutating caller state',async t=>{
+  const {peer,client}=await fixture(t),token=access(),realNow=Date.now;
+  let clock=realNow(),calls=0;
+  peer.setHandler((req,res)=>{
+    calls++;const url=new URL(req.url,peer.origin),next=new URL(url);next.searchParams.set('page','2');
+    // The first response consumes the original credential lifetime. A caller
+    // mutation cannot authorize the next page using that same access token.
+    clock=token.expiresAtMs+1;token.expiresAtMs=clock+60000;
+    json(res,[],200,{Link:`<${next.href}>; rel="next"`});
+  });
+  Date.now=()=>clock;
+  try {
+    await assert.rejects(client.readResults({token,courseId:'11',lineItemId:'33',userId:'opaque:user'}),/expired_credential/);
+    assert.equal(calls,1,'expired credentials never reach a second network send');
+  } finally {Date.now=realNow;}
+});

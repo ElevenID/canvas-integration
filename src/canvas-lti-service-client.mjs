@@ -36,7 +36,7 @@ export function createCanvasLtiServiceClient(configuration) {
       ||!Number.isInteger(maxPages)||maxPages<1||maxPages>16||(ca!==undefined&&(typeof ca!=='string'||ca.length>65536||!ca.includes('-----BEGIN CERTIFICATE-----')||/PRIVATE KEY/.test(ca))))fail('invalid_configuration');
   }catch{fail('invalid_configuration');}
   const clientId=configuration.clientId;
-  async function operation(work) {
+  async function operation(work,validUntil) {
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
     try {
       const pinned=await resolveAddress(origin,allowed,controller.signal);let used=0;
@@ -44,6 +44,9 @@ export function createCanvasLtiServiceClient(configuration) {
         let req,settled=false;
         const finish=(error,value)=>{if(settled)return;settled=true;if(error){req?.destroy();reject(error);}else resolve(value);};
         try {
+          // DNS and preceding pages may consume the remaining credential life.
+          // Fence every actual send against the original immutable deadline.
+          if(validUntil!==undefined && Date.now()>=validUntil)fail('expired_credential');
           const url=new URL(path,origin);if(url.origin!==origin||url.username||url.password||url.hash)fail('invalid_resource');
           req=request(url,{method:body===undefined?'GET':'POST',agent:false,rejectUnauthorized:true,minVersion:'TLSv1.2',maxHeaderSize:16384,
             family:pinned.family,autoSelectFamily:false,lookup:pinnedLookup(url.hostname.replace(/^\[|\]$/g,''),pinned),signal:controller.signal,
@@ -67,7 +70,7 @@ export function createCanvasLtiServiceClient(configuration) {
             });
           });
           req.on('error',()=>finish(new CanvasLtiServiceError(controller.signal.aborted?'timeout':'transport_error')));req.end(body);
-        }catch{finish(new CanvasLtiServiceError('unavailable'));}
+        }catch(error){finish(error instanceof CanvasLtiServiceError?error:new CanvasLtiServiceError('unavailable'));}
       });
       return await work(send);
     }catch(error){if(error instanceof CanvasLtiServiceError)throw error;fail(controller.signal.aborted?'timeout':'unavailable');}
@@ -112,19 +115,23 @@ export function createCanvasLtiServiceClient(configuration) {
             ||!Number.isSafeInteger(data.expires_in)||data.expires_in<1||data.expires_in>86400||typeof data.scope!=='string')fail('invalid_token_response');
           const granted=scopes(data.scope.split(' '));if(granted.some(scope=>!requested.includes(scope)))fail('invalid_token_response');
           return Object.freeze({accessToken:data.access_token,expiresIn:data.expires_in,scopes:Object.freeze(granted)});
-        });
+        },input.expiresAt*1000);
       }catch(error){if(error instanceof CanvasLtiServiceError)throw error;fail('invalid_token_request');}
     },
-    async readLineItem({token,courseId,lineItemId}) {
+    async readLineItem(input) {
+      exactRecord(input,['token','courseId','lineItemId'],'invalid_resource');
+      const {token,courseId,lineItemId}=input,expiresAtMs=token?.expiresAtMs;
       const access=authorization(token,ltiReadScopes.lineitems),path=`/api/lti/courses/${canvasId(courseId)}/line_items/${canvasId(lineItemId)}`;
       return operation(async send=>{
         const {data,link}=await send(path,{token:access,accept:'application/vnd.ims.lis.v2.lineitem+json'});object(data);sameUrl(data.id,origin+path);
         if(link!==undefined||typeof data.scoreMaximum!=='number'||!Number.isFinite(data.scoreMaximum)||data.scoreMaximum<0
-          ||(data.resourceLinkId!==undefined&&!visible(data.resourceLinkId))||token.expiresAtMs<=Date.now())fail('invalid_payload');
+          ||(data.resourceLinkId!==undefined&&!visible(data.resourceLinkId))||expiresAtMs<=Date.now())fail('invalid_payload');
         return Object.freeze({id:data.id,scoreMaximum:data.scoreMaximum,resourceLinkId:data.resourceLinkId??null});
-      });
+      },expiresAtMs);
     },
-    async readResults({token,courseId,lineItemId,userId}) {
+    async readResults(input) {
+      exactRecord(input,['token','courseId','lineItemId','userId'],'invalid_resource');
+      const {token,courseId,lineItemId,userId}=input,expiresAtMs=token?.expiresAtMs;
       const access=authorization(token,ltiReadScopes.results),user=identifier(userId),lineitem=`${origin}/api/lti/courses/${canvasId(courseId)}/line_items/${canvasId(lineItemId)}`;
       const initial=new URL(lineitem+'/results');initial.searchParams.set('user_id',user);initial.searchParams.set('limit','100');
       return operation(async send=>{
@@ -143,10 +150,12 @@ export function createCanvasLtiServiceClient(configuration) {
           }
           url=next(link,url,initial,seen);
         }
-        if(token.expiresAtMs<=Date.now())fail('expired_token');return found;
-      });
+        if(expiresAtMs<=Date.now())fail('expired_token');return found;
+      },expiresAtMs);
     },
-    async readMembership({token,courseId,userId,contextId,resourceLinkId}) {
+    async readMembership(input) {
+      exactRecord(input,['token','courseId','userId','contextId','resourceLinkId'],'invalid_resource');
+      const {token,courseId,userId,contextId,resourceLinkId}=input,expiresAtMs=token?.expiresAtMs;
       const access=authorization(token,ltiReadScopes.memberships),user=identifier(userId),context=identifier(contextId),resource=identifier(resourceLinkId);
       const initial=new URL(`/api/lti/courses/${canvasId(courseId)}/names_and_roles`,origin);initial.searchParams.set('rlid',resource);initial.searchParams.set('limit','100');
       return operation(async send=>{
@@ -165,8 +174,8 @@ export function createCanvasLtiServiceClient(configuration) {
           }
           url=next(link,url,initial,seen);
         }
-        if(token.expiresAtMs<=Date.now())fail('expired_token');return found;
-      });
+        if(expiresAtMs<=Date.now())fail('expired_token');return found;
+      },expiresAtMs);
     },
   });
 }
