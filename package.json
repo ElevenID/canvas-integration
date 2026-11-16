@@ -104,6 +104,16 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/connector-https-service.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./connector-oauth-runtime": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/connector-oauth-runtime.mjs",
+      "default": "./src/browser-denied.mjs"
+    },
+    "./oauth-http-rate-limiter": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/oauth-http-rate-limiter.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {

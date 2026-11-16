@@ -83,7 +83,7 @@ composition evidence, not a deployed Canvas-to-Gateway-to-OB3 qualification.
 
 Still required: deployment credential acquisition/rotation; reviewed per-worker
 least-privilege role provisioning and migrations; durable initial-exchange
-uncertainty/reconciliation; full HTTP server/token-agent/worker scheduling and
+uncertainty/reconciliation; production HTTP deployment/token-agent/worker scheduling and
 shutdown composition; deployed network-denial/outage/unknown-commit tests;
 provider functionality and cross-repository retirement. The fixture role has
 combined connector table/function access solely to exercise both adapters; it
@@ -92,3 +92,8 @@ is not a production least-privilege grant template.
 Driver behavior was checked against the official [Client API](https://node-postgres.com/apis/client)
 and [Pool API](https://node-postgres.com/apis/pool), plus the exact installed
 8.23.1 source. The exact lock graph remains a review gate for dependency updates.
+
+The [OAuth runtime contract](OAUTH_RUNTIME.md) separately exercises a constrained
+HTTP role and counter-only role, including actual OAuth publication after a
+disconnected client. This local evidence does not approve production ownership
+or role membership and does not qualify worker scheduling.
