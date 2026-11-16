@@ -12,6 +12,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.mjs'},
+ 'bin/serve-oauth.mjs': {'../src/oauth-service-config.mjs', '../src/connector-oauth-runtime.mjs'},
  'src/browser-denied.mjs': set(),
  'src/canvas-oauth-provider.mjs': {'./canvas-rest-network.mjs', 'node:https'},
  'src/canvas-oauth.mjs': {'./canvas-rest-network.mjs', 'node:crypto', './oauth-browser-binding.mjs'},
@@ -24,7 +25,8 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
    './encrypted-vault.mjs', './canvas-oauth-provider.mjs', './canvas-oauth.mjs', './gateway-admin-auth.mjs',
    './connector-https-service.mjs', './oauth-http-rate-limiter.mjs'},
  'src/encrypted-vault.mjs': {'node:crypto'},
- 'src/file-credentials.mjs': {'node:fs/promises', 'node:path'},
+ 'src/file-credentials.mjs': {'./private-file.mjs'},
+ 'src/private-file.mjs': {'node:fs/promises', 'node:path'},
  'src/gateway-admin-auth.mjs': {'node:https'},
  'src/gateway-client.mjs': {'./operations.mjs', 'node:https'},
  'src/observation-outbox.mjs': {'./observation-submit.mjs'},
@@ -33,6 +35,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/oauth-browser-binding.mjs': {'node:crypto'},
  'src/oauth-callback-http.mjs': {'./oauth-browser-binding.mjs'},
  'src/oauth-http-rate-limiter.mjs': set(),
+ 'src/oauth-service-config.mjs': {'node:path', './private-file.mjs', './file-credentials.mjs'},
  'src/openbao-key-provider.mjs': {'node:https'},
  'src/operations.mjs': set(),
  'src/postgres-pool.mjs': {'pg/lib/client.js', 'pg-pool'},
@@ -96,6 +99,7 @@ def audit(root: Path) -> list[str]:
      './oauth-browser-binding': './src/oauth-browser-binding.mjs',
      './oauth-callback-http': './src/oauth-callback-http.mjs',
      './oauth-http-rate-limiter': './src/oauth-http-rate-limiter.mjs',
+     './oauth-service-config': './src/oauth-service-config.mjs',
      './openbao-key-provider': './src/openbao-key-provider.mjs',
      './postgres-pool': './src/postgres-pool.mjs',
      './postgres-repository': './src/postgres-repository.mjs',

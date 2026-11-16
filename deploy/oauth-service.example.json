@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "database": {
+    "host": "connector-db.example.org",
+    "port": 5432,
+    "database": "canvas_connector",
+    "user": "canvas_oauth_http",
+    "passwordFile": "/run/canvas-connector/database-password",
+    "caFile": "/run/canvas-connector/database-ca.pem"
+  },
+  "keyCustody": {
+    "openbaoOrigin": "https://connector-vault.example.org",
+    "mount": "connector-kv",
+    "keyPath": "canvas-envelope",
+    "keyNamespace": "canvas",
+    "tokenFile": "/run/canvas-connector/openbao-token"
+  },
+  "canvas": {},
+  "gatewayAuthentication": {
+    "gatewayOrigin": "https://gateway.example.org",
+    "sessionCookieName": "__Host-marty_session"
+  },
+  "http": {
+    "publicOrigin": "https://connector.example.org",
+    "completionUrl": "https://connector.example.org/complete",
+    "host": "0.0.0.0",
+    "port": 8443,
+    "maxConcurrentRequests": 4,
+    "tlsKeyFile": "/run/canvas-connector/tls-key.pem",
+    "tlsCertificateFile": "/run/canvas-connector/tls-certificate.pem"
+  }
+}

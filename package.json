@@ -119,13 +119,19 @@
       "browser": "./src/browser-denied.mjs",
       "node": "./src/file-credentials.mjs",
       "default": "./src/browser-denied.mjs"
+    },
+    "./oauth-service-config": {
+      "browser": "./src/browser-denied.mjs",
+      "node": "./src/oauth-service-config.mjs",
+      "default": "./src/browser-denied.mjs"
     }
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "check:boundary": "python3 scripts/check_boundary.py",
     "check": "npm run check:boundary && npm test",
-    "probe": "node bin/probe.mjs"
+    "probe": "node bin/probe.mjs",
+    "start:oauth": "node bin/serve-oauth.mjs"
   },
   "files": [
     "src",
