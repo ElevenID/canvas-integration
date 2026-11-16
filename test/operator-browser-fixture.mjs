@@ -77,10 +77,14 @@ canvas.setHandler((req,res)=>{void(async()=>{
   json(res,{access_token:'synthetic_operator_access_token_000001',refresh_token:'synthetic_operator_refresh_token_00001',expires_in:3600,token_type:'Bearer'});
 })().catch(()=>res.destroy());});
 try {
+  // The preceding POSIX custody contract rotates its own HTTP login. This
+  // fixture owns a separate login inheriting only that reviewed restricted role,
+  // so its credential never depends on another fixture's rotation phase.
+  owner("CREATE ROLE canvas_operator_http LOGIN PASSWORD 'synthetic-operator-http-password'; GRANT canvas_oauth_http TO canvas_operator_http;");
   owner("UPDATE canvas_connector.oauth_http_limit SET request_limit=1000,hits=0,window_started_at=clock_timestamp()-interval '1 second';");
   runtime=await createConnectorOAuthRuntime({
-    database:{host:'localhost',port:f.port,database:'canvas_driver_test',user:'canvas_oauth_http',ca:f.ca,
-      credentialProvider:{getPassword:async()=> 'synthetic-oauth-http-password'},maxConnections:8,queryTimeoutMs:5000,connectTimeoutMs:1000},
+    database:{host:'localhost',port:f.port,database:'canvas_driver_test',user:'canvas_operator_http',ca:f.ca,
+      credentialProvider:{getPassword:async()=> 'synthetic-operator-http-password'},maxConnections:8,queryTimeoutMs:5000,connectTimeoutMs:1000},
     keyCustody:{openbaoOrigin:f.baoOrigin,mount:'connector-kv',keyPath:'canvas-envelope',keyNamespace:'canvas',ca:f.baoCa,tokenProvider:{getToken:async()=>f.baoToken}},
     canvas:{ca:canvas.ca,allowedPrivateAddresses:['127.0.0.1','::1'],timeoutMs:10000},
     gatewayAuthentication:{gatewayOrigin:front.origin,sessionCookieName:'__Host-marty_session',ca:front.ca},
