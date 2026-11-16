@@ -4,7 +4,7 @@ The POSIX entry point starts the concrete OAuth runtime without a caller-written
 JavaScript bootstrap:
 
 ```sh
-CANVAS_CONNECTOR_CONFIG_FILE=/run/canvas-connector/service.json npm run start:oauth
+CANVAS_CONNECTOR_CONFIG_FILE=/run/canvas-connector/service.json node bin/serve-oauth.mjs
 ```
 
 Start from [the configuration example](../deploy/oauth-service.example.json).
