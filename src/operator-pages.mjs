@@ -187,7 +187,10 @@ function operatorBrowser() {
       button.type = 'button'; button.textContent = 'Inspect original receipt';
       button.addEventListener('click', () => run(async () => {
         if(organizationId!==entry.organizationId) {notice('Switch to the original ElevenID organization '+entry.organizationId+' and reload context to inspect this receipt.');return;}
-        const result = await post(entry.receiptPath, { ...entry.extras, operation_id: entry.operationId }); show(result);
+        const data={operation_id:entry.operationId};
+        if(entry.formId==='recovery')data.authorization_id=entry.extras.authorization_id;
+        if(entry.formId==='lti-service-recovery')data.attempt_id=entry.extras.attempt_id;
+        const result = await post(entry.receiptPath,data); show(result);
         if (matchesReceipt(entry, result.receipt)) {
           save(journal.filter(current => current !== entry)); notice('Original receipt found. Inspect current state before another change.');
         } else if(entry.formId==='lti-credential'&&result.attemptId===entry.operationId&&result.phase==='resolved'&&result.receipt===null) {
