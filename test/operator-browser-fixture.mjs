@@ -307,7 +307,11 @@ try {
   assert.equal(exchanges,1);assert.deepEqual(pageErrors,[]);assert.ok(await idle());
   const screenshot=process.env.CANVAS_OPERATOR_TEST_SCREENSHOT;
   if(screenshot) {
-    assert.ok(isAbsolute(screenshot));await page.screenshot({path:screenshot,fullPage:true});
+    assert.ok(isAbsolute(screenshot));
+    for(const id of ['lti-capture-edit','lti-capture-action'])await page.locator('#'+id).evaluate(element=>element.closest('details').open=true);
+    await page.locator('#lti-capture-action [name=action]').selectOption('activate');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+    await page.screenshot({path:screenshot,fullPage:true});
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await page.screenshot({path:screenshot.replace(/\.png$/,'-mobile.png'),fullPage:true});
