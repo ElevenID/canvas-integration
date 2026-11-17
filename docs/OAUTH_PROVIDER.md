@@ -64,7 +64,7 @@ The service is not an HTTP server or a production storage adapter. Before deploy
 - Refresh leases, token rotation, durable revocation queue, backoff and cleanup workers. The provider exposes a refresh-token exchange, but candidate durable refresh/disconnect worker engines now exist (see REFRESH_WORKER.md and REVOCATION_WORKER.md); deployment scheduling and reconciliation still require qualification.
 - Integration acceptance against a synthetic Canvas tenant and connector-owned storage; no real tenant or production OAuth grants were used in this stage.
 
-No public Gateway route, API-key scope, core database migration or Canvas production callback was enabled by this PR. The existing Marty implementation remains in place until the new service, persistence and HTTP adapters are independently qualified.
+No public Gateway route, API-key scope, core database migration or Canvas production callback was enabled by this PR. The platform Canvas implementation is being retired independently of connector production qualification. Incomplete connector flows remain disabled; qualification is deferred before activation, as described in [the split boundary](BOUNDARY.md#deferred-work).
 
 ## Tests
 

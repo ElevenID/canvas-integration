@@ -4,8 +4,10 @@ The server-only `./observations` export is the connector's narrow producer
 transport. It sends one unsigned observation to the public Common Gateway:
 `POST /v1/evidence/observations`. It never uses a Canvas-specific Gateway route,
 private core service, core database, authority snapshot, verification, approval,
-signing or issuance operation. The legacy compatibility client remains separate
-pending complete provider/runtime qualification and retirement.
+signing or issuance operation. The legacy Canvas administration client is retired;
+its package root fails without any network request. Production qualification of
+this generic submission flow is deferred before activation, independently of
+platform Canvas removal.
 
 ```js
 import {

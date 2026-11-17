@@ -2,16 +2,37 @@
 
 ## Enforced in these slices
 
-The reviewed Gateway client, unsigned-observation submitter and browser-admin
-authenticator own **connector-to-ElevenID** network requests, all through the
-public Common Gateway. The compatibility client selects a named operation, not
-an arbitrary URL. Its HTTPS
-Gateway origin and organization are fixed for the client lifetime. Incoming
-headers, keys, URL overrides and organization substitutions are not accepted.
-API operations carry server-side API keys; unsigned submission requires the exact
-`evidence:submit` scope. Browser administration forwards only the configured
-session cookie to Gateway's public session/permission reads. It never substitutes
-for API-key submission. The registry exposes no internal or signing/approval API.
+The public Common Gateway is the sole connector-to-platform integration point.
+The connector cannot import platform source packages, query platform databases,
+call private services, or receive signing/approval credentials.
+
+| Responsibility | Owner |
+| --- | --- |
+| Canvas credentials, OAuth/LTI protocol state, provider identities, capture schedules and outbox | This connector and its separate database/vault |
+| Canonical identity, application ownership, learner consent and association authority | Platform/Core, exposed through generic public Gateway contracts |
+| Evidence source/binding approval, observation policy, canonical credential creation and signing | Platform/Core |
+| HTTPS authentication, tenant/resource/scope enforcement and public contract routing | Common Gateway |
+
+The implemented adapters address these generic contract paths only:
+
+| Adapter | Public Gateway contract | Authority |
+| --- | --- | --- |
+| `observation-submit.mjs` | `POST /v1/evidence/observations` | Dedicated organization API key, exact `evidence:submit` scope |
+| `gateway-admin-auth.mjs` | `/v1/auth/me`, `/v1/organizations/{id}/members/me/permissions` | Configured browser session cookie |
+| `gateway-binding-reader.mjs` | `/v1/organizations/{id}/external-observation-bindings/{binding}/inspect` | Authenticated administrator session |
+| `gateway-ownership-client.mjs` | `/v1/auth/me`, `/v1/organizations/{id}/application-ownerships/{application}/{action}` | Session-bound current platform authority |
+| `gateway-association-client.mjs` | `/v1/identity/association-challenges/{challenge}/{action}` | Producer API key, Core-owned source grant and launch-bound challenge capability |
+
+Paths, actions, identity binding and response validation are fixed by each adapter;
+none accepts an arbitrary destination or falls back to a private service. These
+are implemented code contracts, not a claim of deployed or production-qualified
+support. Paired platform changes must be integrated before dependent flows activate.
+
+The old Canvas-specific Marty administration registry, key-file loader and probe
+are removed. `createGatewayClient` remains only as an explicit migration error:
+`retired_gateway_api`, before reading configuration or issuing any network request.
+It cannot be opted back in. Canvas platform/job administration belongs here; no
+compatibility path may keep provider logic in the platform.
 
 The independent `src/canvas-rest-reader.mjs` owns **Canvas-side** GET requests.
 Its import graph cannot reach the Gateway client, core configuration or storage.
@@ -40,11 +61,9 @@ production deployment remains open.
 There is no in-memory or plaintext production fallback. See `OAUTH_PROVIDER.md`,
 `SERVICE_BOOTSTRAP.md` and `OAUTH_ATTEMPT_RECOVERY.md`.
 
-CLI configuration rejects inherited core database/service credentials. Future
-connector-owned storage must use distinct configuration and credentials, not
-Marty's `DATABASE_URL`, Redis, service keys or signer authority. The Canvas
-reader takes explicit server-side configuration; it does not read inherited
-service credentials from the environment.
+Connector-owned storage uses distinct configuration, database roles and credentials,
+never Marty's database, Redis, service keys or signer authority. The Canvas reader
+takes explicit server-side configuration and cannot read inherited service secrets.
 
 The only direct runtime dependencies are exact-pinned `pg@8.23.1` and `pg-pool@3.14.0`; the complete transitive registry/integrity graph is locked and checked. Optional transports and lifecycle scripts are omitted during installation. There are no development dependencies. CI verifies its runtime
 file/import inventory, server-only exports, lockfile and Gateway, Canvas REST and OAuth transport invariants.
@@ -71,10 +90,9 @@ not a complete HTTPS hostname policy. Do not claim live isolation from YAML alon
 Gateway independently validates the API key, resolves resource ownership and
 enforces organization/scopes. Local HTTPS fixtures validate wire behavior, not
 the production Gateway's authentication, audit, policies or data semantics.
-A read-only integration key must remain read-only even when stolen or used
-outside this client. The `integrations:write` scope is broader in the existing
-Gateway than this client's management allowlist. Do not grant it to routine
-workers until server-side least privilege is resolved.
+Do not grant routine workers platform management or approval permissions. Provider
+observations are unsigned inputs; source registration and canonical policy determine
+what the platform may accept, never a trusted/approved flag supplied by Canvas.
 
 Canvas-facing LTI/OIDC callbacks eventually terminate in the connector. Their
 protocol authentication is separate from, and never substitutes for, the API
@@ -83,31 +101,34 @@ localStorage, Canvas launch claims or browser requests. The REST reader's
 caller must bind course/learner identifiers from verified server-side identity
 mapping; OAuth token possession alone does not authorize arbitrary browser IDs.
 
-## Required next implementation and acceptance gates
+## Split acceptance
 
-1. Replace existing Canvas-specific core management with connector-owned
-   platform/OAuth/job state. The compatibility API client is not the final
-   architecture and must not permanently retain provider logic in core.
-2. Provide missing generic, public Gateway operations for evidence ingestion,
-   application/subject linking, result/status reads and delivery acknowledgments.
-   Never expose internal endpoints or simply assert that external facts are
-   trusted. Bind sources, evidence types and tenant authority through policy.
-3. Complete production role/deployment qualification, operator capture scheduling, unknown
-   OAuth outcome resolution and LTI/AGS/NRPS providers. Qualify
-   the extracted OAuth and REST adapters against a synthetic Canvas tenant
-   before replacing the in-core implementation. Keep tool signing distinct
-   from canonical credential signing. Do not call legacy event ingest as an
-   admission shortcut.
-4. Extract Canvas administration and learner interfaces. Their backend must
-   authenticate users and authorize actions before using scoped Gateway keys.
-   A broad API-key-backed proxy accessible to learners is prohibited.
-5. Prove tenant/scope/revocation/audit/idempotency behavior against the real
-   Common Gateway using synthetic organizations and customer-created keys.
-6. Run OB3 evidence-to-wallet acceptance in an isolated existing development
-   environment; prove direct-service/database access fails at the network layer.
-   Preserve rootless Docker, OpenBao and current workloads/automatic-stop guards.
-7. Transfer or replace all remaining source/test/deployment ownership before
-   removing the original implementation, then cut over with rollback evidence.
+Removal of Canvas UI, provider-specific routes, worker/runtime wiring, dependencies
+and current architecture coupling from Marty is independent of production connector
+readiness. Preserve generic identity, ownership and credential safeguards. Required
+protected reviews/checks and merge queues still apply to integration; local tests
+drive development. Historical immutable evidence may retain provider names as
+provenance; active runtime must not use it to restore retired APIs.
 
-The merged Marty-ui architecture decision is PR #1950. These slices do not
-alter its production routes, worker, database migrations or existing UI imports.
+## Deferred work
+
+These TODOs are owned by the Canvas connector maintainers unless stated otherwise.
+They do not block the repository split. Keep affected flows disabled until their
+specific authority and operational requirements are implemented and verified.
+
+- Complete learner consent/browser composition and source-attested association.
+  Platform maintainers own canonical identity/ownership and public Gateway contracts;
+  the connector must never infer canonical identity from a Canvas learner ID.
+- Complete AGS/NRPS, deep linking, missing administration/learner pages, unknown OAuth
+  outcome recovery and any unsupported mirror/retention behavior in the connector.
+  Do not retain Canvas code or signing origins in Marty to support them.
+- Qualify deployment roles, ingress/egress enforcement, agent credentials and worker
+  scheduling before production activation. Existing sample NetworkPolicy is unverified.
+- Verify generic Gateway tenant/scope/revocation/audit/idempotency behavior using
+  synthetic organizations before activating dependent delivery or association flows.
+- Perform synthetic end-to-end qualification, cutover and rollback planning when a
+  deployment is requested. No AWS deployment or production cutover is required now.
+
+This scope supersedes the original production-before-retirement sequence. The
+Marty UI removal is consolidated in ElevenID/marty-ui PR #1987, with paired Core
+PR #444 and common Gateway PR #158. No merge or deployment is implied by this record.

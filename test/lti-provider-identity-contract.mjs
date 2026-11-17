@@ -28,12 +28,12 @@ await sql(`GRANT SELECT ON canvas_connector.lti_provider_identities,canvas_conne
 const reg=randomUUID();
 await sql(`INSERT INTO canvas_connector.lti_registrations(id,organization_id,platform_id,client_id,deployment_id,trust_profile,target_link_uri,enabled)
  VALUES('${reg}','identity-org','identity-platform','client-identity','deployment-identity','self_managed_same_origin','https://connector.example/lti/identity',true);`);
-async function launch(subject,numeric,{accepted=true,registration=reg,client='client-identity',deployment='deployment-identity',expiry=120}={}) {
+async function launch(subject,numeric,{accepted=true,registration=reg,client='client-identity',deployment='deployment-identity',expiry=120,course}={}) {
  const state=randomBytes(32).toString('hex'),browser=randomBytes(32).toString('hex'),token=randomBytes(32).toString('hex'),nonce=randomBytes(32).toString('base64url');
  const now=Number(await sql('SELECT floor(extract(epoch FROM clock_timestamp()))::bigint;'));
  const payload={issuer:'https://canvas.identity.example',clientId:client,deploymentId:deployment,subject,nonce,targetLinkUri:'https://connector.example/lti/identity',
   issuedAt:now-1,expiresAt:now+expiry,notBefore:null,messageType:'LtiResourceLinkRequest',version:'1.3.0',resourceLinkId:'identity-resource',contextId:null,
-  ...(numeric===undefined?{}:{canvasUserId:numeric})};
+  ...(numeric===undefined?{}:{canvasUserId:numeric}),...(course===undefined?{}:{canvasCourseId:course})};
  assert.ok(await sql(`SELECT canvas_connector.begin_lti_launch('${registration}',1,1,'${state}','${browser}','${nonce}','${randomUUID()}');`,true));
  assert.ok(await sql(`SELECT canvas_connector.stage_lti_launch('${state}','${token}',${quote(JSON.stringify(payload))}::jsonb);`,true));
  if(accepted) assert.ok(await sql(`SELECT canvas_connector.confirm_lti_launch('${state}','${browser}','${token}');`,true));
@@ -45,6 +45,16 @@ async function observe(value,browser=value.browser) {
 const current=value=>store.current({registrationId:value.registrationId,stateHash:value.state,browserHash:value.browser});
 const absent=await launch('subject-a'),observed=await observe(absent);
 assert.equal(observed.status,'subject_observed');assert.equal(observed.numericIdSupplied,false);
+const courseOnly=await launch('course-only',undefined,{course:'18446744073709551615'});
+assert.equal((await observe(courseOnly)).status,'subject_observed');
+assert.equal((await current(courseOnly)).canvasUserId,null,'course never supplies a provider user ID');
+assert.equal(await sql(`SELECT protocol_claims->>'canvasCourseId' FROM canvas_connector.lti_launch_states WHERE state_hash='${courseOnly.state}';`),'18446744073709551615');
+for(const value of [null,42,true,{},[],'0','01','18446744073709551616','$Canvas.course.id']) {
+ const valid=await sql(`SELECT canvas_connector.lti_claims_match(s.protocol_claims || jsonb_build_object('canvasCourseId',${quote(JSON.stringify(value))}::jsonb),r,p,s.nonce)
+  FROM canvas_connector.lti_launch_states s JOIN canvas_connector.lti_registrations r ON r.id=s.registration_id
+  JOIN canvas_connector.platforms p ON p.organization_id=s.organization_id AND p.id=s.platform_id WHERE s.state_hash='${courseOnly.state}';`,true);
+ assert.equal(valid,'f','SQL rejects malformed course claim '+JSON.stringify(value));
+}
 const a=await launch('subject-a','42'),receipts=await Promise.all(Array.from({length:8},()=>observe(a)));
 for(const value of receipts)assert.deepEqual(value,receipts[0]);
 assert.equal(receipts[0].status,'numeric_linked');assert.equal(receipts[0].identityRevision,2);

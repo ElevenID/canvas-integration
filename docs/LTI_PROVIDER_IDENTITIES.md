@@ -1,13 +1,15 @@
 # Connector-owned Canvas provider identity
 
 The connector owns a provider-only opaque-to-numeric identity observation registry.
-The old Core launch modules remain pending qualified retirement. Migration014, the signed
+Canvas launch custody belongs in the connector; platform removal does not wait
+for production LTI qualification. Migration014, the signed
 claim decoder, production repository and bounded HTTP adapter are composed by
 the explicitly enabled LTI runtime. The owner must install the migration and
 selected runtime grants; startup checks the additional capabilities and guards.
 There is no runtime DDL, grants, in-memory fallback or replacement transport hook.
-Canonical Gateway learner association and deployed replacement qualification
-remain required before retiring the existing Core flow.
+Canonical Gateway learner association and deployment qualification remain
+activation TODOs, with dependent flows disabled. They do not block retiring the
+legacy Core Canvas flow. See [the split boundary](BOUNDARY.md#deferred-work).
 
 Only `canvas_user_id` inside the verified LTI custom claim can supply a numeric
 Canvas identifier. It is normalized with the same unsigned64-bit identifier
@@ -16,6 +18,16 @@ roles, browser parameters and top-level lookalike fields cannot supply it.
 The configured [Canvas substitution](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.tools_variable_substitutions)
 is `$Canvas.user.id`. This is a provider assertion, not proof of Marty identity,
 account ownership, evidence verification or issuance authority.
+
+Owner migration022 additionally permits `canvas_course_id=$Canvas.course.id` in
+the signed custom claim. It uses the same numeric identifier normalization and
+is persisted only as `canvasCourseId` in the accepted protocol context. Missing
+course substitution remains absent; the opaque LTI context ID, browser fields,
+top-level lookalikes and user ID never supply it. Malformed or unexpanded course
+substitutions reject the launch. This identifies provider query context and
+confers no canonical identity, application, binding or capture authority.
+The [Canvas substitution documentation](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.tools_variable_substitutions)
+defines course availability; launch contexts without a course remain supported.
 
 Observation requires an accepted launch receipt and its original browser proof.
 New observations recheck current platform/registration revisions, expiry and

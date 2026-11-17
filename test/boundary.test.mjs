@@ -11,14 +11,14 @@ test('reviewed runtime passes the boundary gate', async () => {
   const result = await run('python3', ['scripts/check_boundary.py']);
   assert.match(result.stdout, /Boundary check passed/);
 });
-for (const mutation of ['internal-package', 'alternate-http', 'dynamic-network', 'dependency', 'browser-export', 'extra-module', 'tls-bypass', 'inbound-outbound', 'inbound-host', 'inbound-shutdown','operator-extra-transport','operator-destination']) {
+for (const mutation of ['internal-package', 'alternate-http', 'dynamic-network', 'dependency', 'browser-export', 'extra-module', 'tls-bypass', 'inbound-outbound', 'inbound-host', 'inbound-shutdown','operator-extra-transport','operator-destination', 'retired-provider-route', 'retired-client-enabled']) {
   test(`boundary gate rejects regression: ${mutation}`, async () => {
     const directory = await mkdtemp(join(tmpdir(), 'canvas-boundary-'));
     try {
       for (const path of ['src', 'bin', 'scripts', 'package.json', 'package-lock.json']) {
         await cp(path, join(directory, path), { recursive: true });
       }
-      const file = join(directory, 'src/operations.mjs');
+      const file = join(directory, 'src/gateway-client.mjs');
       if (mutation === 'internal-package') await writeFile(file, "import internal from 'marty-issuance-service';\n");
       if (mutation === 'alternate-http') await writeFile(file, "import { request } from 'node:http';\n");
       if (mutation === 'dynamic-network') await writeFile(file, "const net = await import('node:net');\n");
@@ -38,8 +38,14 @@ for (const mutation of ['internal-package', 'alternate-http', 'dynamic-network',
         await writeFile(path,source);
       }
       if (mutation === 'tls-bypass') {
-        const client = join(directory, 'src/gateway-client.mjs');
-        await writeFile(client, (await readFile(client, 'utf8')).replace('rejectUnauthorized: true', 'rejectUnauthorized: false'));
+        const client = join(directory, 'src/observation-submit.mjs');
+        await writeFile(client, (await readFile(client, 'utf8')).replace('rejectUnauthorized:true', 'rejectUnauthorized:false'));
+      }
+      if (mutation === 'retired-provider-route') {
+        await writeFile(file, (await readFile(file, 'utf8')) + "\nconst retired = '/v1/integrations/canvas/platforms';\n");
+      }
+      if (mutation === 'retired-client-enabled') {
+        await writeFile(file, (await readFile(file, 'utf8')).replace('throw new GatewayError();', 'return {};'));
       }
       if (mutation === 'dependency' || mutation === 'browser-export') {
         const path = join(directory, 'package.json');

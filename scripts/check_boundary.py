@@ -11,7 +11,7 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.mjs'},
+IMPORTS = {
  'bin/serve-oauth.mjs': {'../src/oauth-service-config.mjs', '../src/connector-oauth-runtime.mjs'},
  'bin/serve-workers.mjs': {'../src/worker-service-config.mjs','../src/connector-worker-runtime.mjs'},
  'src/browser-denied.mjs': set(),
@@ -55,7 +55,6 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/capture-route-contract.mjs': {'./canvas-rest-contract.mjs', './canvas-rest-network.mjs'},
  'src/capture-route-admin-http.mjs': {'./capture-route-contract.mjs', './private-json.mjs'},
  'src/capture-route-admin-store.mjs': {'./capture-route-contract.mjs', './platform-admin.mjs'},
- 'src/configuration.mjs': {'node:fs/promises', './gateway-client.mjs'},
  'src/connection-admin.mjs': set(),
  'src/platform-admin.mjs': {'./canvas-rest-network.mjs'},
  'src/oauth-client-contract.mjs': set(),
@@ -74,7 +73,11 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/private-json.mjs': set(),
  'src/gateway-admin-auth.mjs': {'node:https'},
  'src/gateway-binding-reader.mjs': {'node:https', './gateway-admin-auth.mjs', './private-json.mjs'},
- 'src/gateway-client.mjs': {'./operations.mjs', 'node:https'},
+ 'src/gateway-ownership-client.mjs': {'node:https', './private-json.mjs'},
+ 'src/gateway-association-client.mjs': {'node:https', './private-json.mjs'},
+ 'src/lti-association-store.mjs': {'node:crypto'},
+ 'src/lti-association-lifecycle.mjs': set(),
+ 'src/gateway-client.mjs': set(),
  'src/observation-outbox.mjs': {'./observation-submit.mjs'},
  'src/observation-submit.mjs': {'node:https'},
  'src/oauth-admin-http.mjs': {'./oauth-browser-binding.mjs'},
@@ -86,7 +89,6 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/worker-service-config.mjs': {'node:path','./private-json.mjs','./private-file.mjs','./file-credentials.mjs','./capture-scheduler.mjs'},
  'src/worker-loop.mjs': set(),
  'src/openbao-key-provider.mjs': {'node:https'},
- 'src/operations.mjs': set(),
  'src/postgres-pool.mjs': {'pg/lib/client.js', 'pg-pool'},
  'src/postgres-repository.mjs': set(),
  'src/rest-capture.mjs': {'./canvas-rest-reader.mjs', './canvas-rest-contract.mjs', './canvas-rest-network.mjs', './observation-submit.mjs'},
@@ -143,7 +145,6 @@ def audit(root: Path) -> list[str]:
      './canvas-oauth': './src/canvas-oauth.mjs',
      './canvas-oauth-provider': './src/canvas-oauth-provider.mjs',
      './canvas-rest': './src/canvas-rest-reader.mjs',
-     './configuration': './src/configuration.mjs',
      './connector-https-service': './src/connector-https-service.mjs',
      './connector-oauth-runtime': './src/connector-oauth-runtime.mjs',
      './connector-worker-runtime': './src/connector-worker-runtime.mjs',
@@ -180,11 +181,14 @@ def audit(root: Path) -> list[str]:
             errors.append("connector inbound HTTPS boundary invariant missing")
     if len(re.findall(r"from ['\"]node:https['\"]", service)) != 1:
         errors.append("outbound transport forbidden in inbound connector service")
+    # The migration error shim has no imports or transport. Reviving provider
+    # administration routes anywhere in runtime requires an explicit boundary change.
     client = (root / "src/gateway-client.mjs").read_text()
-    for invariant in ("rejectUnauthorized: true", "agent: false", "'X-API-Key': apiKey",
-                      "'X-Organization-ID': organizationId", "redirect_denied", "operation_not_allowed"):
-        if invariant not in client:
-            errors.append("Gateway transport invariant missing")
+    if "throw new GatewayError();" not in client or "retired_gateway_api" not in client:
+        errors.append("retired Gateway API must remain disabled")
+    for name, path in files.items():
+        if re.search(r"/v1/integrations/canvas|/v1/issuance/[^'\"\s]*canvas", path.read_text(encoding="utf-8")):
+            errors.append(f"retired provider Gateway route: {name}")
     provider = (root / "src/canvas-rest-reader.mjs").read_text()
     for invariant in ("rejectUnauthorized: true", "agent: false", "method: 'GET'", "resolveAddress(origin",
                       "lookup: pinnedLookup", "'Authorization': `Bearer ${accessToken}`", "redirect_denied",
