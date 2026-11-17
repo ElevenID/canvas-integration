@@ -10,8 +10,9 @@ import {prepareLtiCaptureRouteIntent} from '../src/lti-capture-contract.mjs';
 import {ltiServiceReadScopes} from '../src/lti-service-contract.mjs';
 import {httpsFixture,json} from './support/canvas-https-fixture.mjs';
 import {ltiCaptureAdminContract} from './lti-capture-admin-contract.mjs';
+import {ltiWorkerRuntimeContract} from './lti-worker-runtime-contract.mjs';
 
-export async function ltiCaptureContract(configuration,{servicePool,keyProvider,ownerQuery}) {
+export async function ltiCaptureContract(configuration,{servicePool,keyProvider,keyCustody,ownerQuery}) {
  const role='canvas_lti_capture_runtime',password='synthetic-lti-capture-password';
  await ownerQuery(`CREATE ROLE ${role} LOGIN PASSWORD '${password}';GRANT CONNECT ON DATABASE canvas_driver_test TO ${role};
   GRANT USAGE ON SCHEMA canvas_connector TO ${role};
@@ -149,6 +150,7 @@ export async function ltiCaptureContract(configuration,{servicePool,keyProvider,
   for(const sql of ['DELETE FROM canvas_connector.lti_capture_jobs',"UPDATE canvas_connector.lti_capture_jobs SET definition='{}'::jsonb",'UPDATE canvas_connector.lti_capture_routes SET version=version',
    'UPDATE canvas_connector.lti_service_tokens SET expires_at=clock_timestamp()',
    ...['ciphertext','nonce','tag','wrapping_key_id'].map(column=>`SELECT ${column} FROM canvas_connector.lti_tool_keys`)])await assert.rejects(pool.query(sql));
+  await ltiWorkerRuntimeContract(configuration,{pool,organizationId:org,platformId:platform,registrationId:registration,serviceOperationId:operation,definition:route,peer,keyCustody,ownerQuery});
   await ltiCaptureAdminContract(configuration,{organizationId:org,platformId:platform,registrationId:registration,serviceOperationId:operation,definition:route,ownerQuery});
   console.log('Actual restricted TLS PG/OpenBao LTI capture original-ID/concurrency/lease/config/rollback and keyless Canvas read -> atomic existing outbox PASS');
  }finally{await peer.close();await pool.close();}

@@ -8,7 +8,7 @@ import { ltiServiceLifecycleContract } from './lti-service-lifecycle-contract.mj
 import { ltiServiceRecoveryContract } from './lti-service-recovery-contract.mjs';
 import { ltiCaptureContract } from './lti-capture-contract.mjs';
 
-export async function ltiServiceRuntimeContract(configuration,{keyProvider,ownerQuery}) {
+export async function ltiServiceRuntimeContract(configuration,{keyProvider,keyCustody,ownerQuery}) {
  const role='canvas_lti_services',password='synthetic-lti-services-password';
  await ownerQuery(`CREATE ROLE ${role} LOGIN PASSWORD '${password}';
   GRANT CONNECT ON DATABASE canvas_driver_test TO ${role};
@@ -64,7 +64,7 @@ export async function ltiServiceRuntimeContract(configuration,{keyProvider,owner
   await ltiServiceStoreContract(pool,{keyProvider,ownerQuery});
   await ltiServiceLifecycleContract(pool,{keyProvider,ownerQuery});
   await ltiServiceRecoveryContract(pool,{keyProvider,ownerQuery});
-  await ltiCaptureContract(configuration,{servicePool:pool,keyProvider,ownerQuery});
+  await ltiCaptureContract(configuration,{servicePool:pool,keyProvider,keyCustody,ownerQuery});
   console.log('Actual restricted TLS LTI service role, read-only preflight, hidden membership/guard/privilege negatives and composed custody/lifecycle/recovery PASS');
  } finally {await pool.close();}
 }

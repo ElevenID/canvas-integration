@@ -11,6 +11,11 @@ import {createObservationOutbox,createObservationDeliveryWorker} from './observa
 import {createObservationSubmitter} from './observation-submit.mjs';
 import {createWorkerLoop} from './worker-loop.mjs';
 import {prepareCaptureSchedule,createCaptureScheduler,preflightCaptureScheduler} from './capture-scheduler.mjs';
+import {createLtiCaptureRepository} from './lti-capture-repository.mjs';
+import {createLtiCaptureWorker} from './lti-capture-worker.mjs';
+import {createLtiServiceStore} from './lti-service-store.mjs';
+import {createLtiCaptureScheduler} from './lti-capture-scheduler.mjs';
+import {preflightLtiWorker} from './lti-worker-preflight.mjs';
 const unavailable=()=>new Error('connector_worker_runtime_unavailable');
 const id=value=>typeof value==='string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
 function fields(value,allowed) {
@@ -19,14 +24,16 @@ function fields(value,allowed) {
 export async function createConnectorWorkerRuntime(configuration) {
   let pool,loop;
   try {
-    fields(configuration,['database','keyCustody','canvas','gateway','refreshTargets','producers','pollIntervalMs','captureSchedules']);
-    const {database,keyCustody,canvas,gateway,refreshTargets,producers,pollIntervalMs=1000,captureSchedules=[]}=configuration;
+    fields(configuration,['database','keyCustody','canvas','gateway','refreshTargets','producers','pollIntervalMs','captureSchedules','captureMode']);
+    const {database,keyCustody,canvas,gateway,refreshTargets,producers,pollIntervalMs=1000,captureSchedules=[],captureMode='rest'}=configuration;
+    if(!['rest','lti'].includes(captureMode))throw unavailable();const ltiMode=captureMode==='lti';
     fields(keyCustody,['openbaoOrigin','mount','keyPath','keyNamespace','tokenProvider','ca','timeoutMs']);
     fields(canvas,['ca','allowedPrivateAddresses','timeoutMs','maxResponseBytes']);
     fields(gateway,['gatewayOrigin','ca','timeoutMs']);
     if(!Array.isArray(refreshTargets) || refreshTargets.length>32 || !Array.isArray(producers) || producers.length>32
       || !Array.isArray(captureSchedules)||captureSchedules.length>32
       || !Number.isSafeInteger(pollIntervalMs) || pollIntervalMs<100 || pollIntervalMs>60000) throw unavailable();
+    if(ltiMode&&(refreshTargets.length!==0||producers.length===0))throw unavailable();
     const targets=refreshTargets.map(value=>{
       fields(value,['organizationId','platformId']);if(!id(value.organizationId)||!id(value.platformId)) throw unavailable();
       return Object.freeze({...value});
@@ -42,16 +49,18 @@ export async function createConnectorWorkerRuntime(configuration) {
     if(new Set(schedules.map(v=>v.organizationId+':'+v.routeId)).size!==schedules.length
       || new Set(schedules.map(v=>v.organizationId+':'+v.configurationId)).size!==schedules.length
       || schedules.some(schedule=>!slots.some(slot=>slot.organizationId===schedule.organizationId&&slot.producerRef===schedule.producerRef)))throw unavailable();
-    const keyProvider=createOpenBaoKeyProvider(keyCustody),provider=createCanvasOAuthProvider(canvas);
+    const keyProvider=createOpenBaoKeyProvider(keyCustody),provider=ltiMode?undefined:createCanvasOAuthProvider(canvas);
     pool=createConnectorPostgresPool(database);
-    const repository=createPostgresRepository(pool),secretVault=createEncryptedVault({pool,keyProvider});
-    const revocation=createRevocationWorker({repository,secretVault,provider});
-    const refresh=createRefreshWorker({repository,secretVault,provider});
-    const captureRepository=createRestCaptureRepository(pool),outbox=createObservationOutbox(pool);
-    const tasks=[()=>revocation.runOnce()];
+    const repository=ltiMode?undefined:createPostgresRepository(pool),secretVault=ltiMode?undefined:createEncryptedVault({pool,keyProvider});
+    const revocation=ltiMode?undefined:createRevocationWorker({repository,secretVault,provider});
+    const refresh=ltiMode?undefined:createRefreshWorker({repository,secretVault,provider});
+    const captureRepository=ltiMode?createLtiCaptureRepository(pool):createRestCaptureRepository(pool),outbox=createObservationOutbox(pool);
+    const tokenStore=ltiMode?createLtiServiceStore({pool,keyProvider}):undefined;
+    const tasks=ltiMode?[]:[()=>revocation.runOnce()];
     for(const target of targets) tasks.push(()=>refresh.runOnce(target.organizationId,target.platformId));
     for(const slot of slots) {
-      const capture=createCanvasRestCaptureWorker({repository:captureRepository,secretVault,
+      const capture=ltiMode?createLtiCaptureWorker({repository:captureRepository,tokenStore,organizationId:slot.organizationId,producerRef:slot.producerRef,
+        ca:canvas.ca,allowedPrivateAddresses:canvas.allowedPrivateAddresses,timeoutMs:canvas.timeoutMs,maxResponseBytes:canvas.maxResponseBytes}):createCanvasRestCaptureWorker({repository:captureRepository,secretVault,
         organizationId:slot.organizationId,producerRef:slot.producerRef,canvasCa:canvas.ca,
         allowedPrivateAddresses:canvas.allowedPrivateAddresses,timeoutMs:canvas.timeoutMs});
       const delivery=createObservationDeliveryWorker({repository:outbox,
@@ -60,18 +69,18 @@ export async function createConnectorWorkerRuntime(configuration) {
       tasks.push(()=>capture.runOnce(),()=>delivery.runOnce());
     }
     for(const schedule of schedules) {
-      const scheduler=createCaptureScheduler({pool,schedule});tasks.push(()=>scheduler.runOnce());
+      const scheduler=ltiMode?createLtiCaptureScheduler({pool,schedule}):createCaptureScheduler({pool,schedule});tasks.push(()=>scheduler.runOnce());
     }
     loop=createWorkerLoop(tasks,pollIntervalMs);
-    const tables=[['secrets','SELECT'],['secrets','DELETE'],['revocation_jobs','SELECT'],['revocation_jobs','UPDATE']];
-    const functions=['claim_revocation()','record_provider_revocation(uuid,uuid)','finish_revocation(uuid,uuid)','retry_revocation(uuid,uuid)'];
+    const tables=ltiMode?[]:[['secrets','SELECT'],['secrets','DELETE'],['revocation_jobs','SELECT'],['revocation_jobs','UPDATE']];
+    const functions=ltiMode?[]:['claim_revocation()','record_provider_revocation(uuid,uuid)','finish_revocation(uuid,uuid)','retry_revocation(uuid,uuid)'];
     if(targets.length) {
       tables.push(['platforms','SELECT'],['connections','SELECT'],['refresh_attempts','SELECT'],['refresh_attempts','INSERT'],['refresh_attempts','UPDATE'],['secrets','INSERT']);
       functions.push('claim_refresh(text,text)','begin_refresh_exchange(uuid,uuid)','require_refresh_reconciliation(uuid,uuid)',
         'abandon_unstarted_refresh(uuid,uuid)','publish_refresh(uuid,uuid)',
         'stage_refresh_result(uuid,uuid,text,text,text,text,bytea,bytea,bytea,text,text,bytea,bytea,bytea,timestamp with time zone)');
     }
-    if(slots.length) {
+    if(slots.length&&!ltiMode) {
       tables.push(['platforms','SELECT'],['connections','SELECT'],['rest_capture_routes','SELECT'],['rest_capture_jobs','SELECT'],['rest_capture_jobs','UPDATE'],
         ['observation_counters','SELECT'],['observation_counters','INSERT'],['observation_counters','UPDATE'],
         ['observation_outbox','SELECT'],['observation_outbox','INSERT'],['observation_outbox','UPDATE']);
@@ -88,7 +97,7 @@ export async function createConnectorWorkerRuntime(configuration) {
           WHERE NOT has_function_privilege(current_user,'canvas_connector.'||signature,'EXECUTE')) AS ready`,
       [JSON.stringify(tables.map(([name,privilege])=>({name,privilege}))),functions]);
       if(result.rows.length!==1 || result.rows[0].ready!==true) throw unavailable();
-      if(targets.length || slots.length) {
+      if(!ltiMode&&(targets.length || slots.length)) {
         const locks=['platforms',...(slots.length?['connections','rest_capture_routes']:[])];
         const lockResult=await pool.query(`SELECT NOT EXISTS(SELECT 1 FROM unnest($1::text[]) name
           WHERE NOT has_any_column_privilege(current_user,'canvas_connector.'||name,'UPDATE')) AS ready`,[locks]);
@@ -104,7 +113,8 @@ export async function createConnectorWorkerRuntime(configuration) {
             AND NOT tgisinternal AND tgenabled IN ('O','A') AND tgtype=19 AND tgqual IS NULL AND tgnargs=0 AND tgattr=''::int2vector) AS ready`);
         if(secretLocks.rows.length!==1 || secretLocks.rows[0].ready!==true) throw unavailable();
       }
-      if(schedules.length)await preflightCaptureScheduler(pool);
+      if(ltiMode)await preflightLtiWorker(pool,{scheduling:schedules.length>0});
+      else if(schedules.length)await preflightCaptureScheduler(pool);
       const selected=await keyProvider.current();
       try {if(!Buffer.isBuffer(selected?.key)||selected.key.length!==32) throw unavailable();}
       finally {if(Buffer.isBuffer(selected?.key)) selected.key.fill(0);}

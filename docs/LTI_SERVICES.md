@@ -270,13 +270,16 @@ the original operation UUID and use its receipt endpoint after access is restore
 A403 response must not be treated as proof of rollback by a future browser control.
 
 The local contract uses actual Gateway/connector HTTPS and restricted PostgreSQL
-roles with synthetic data. The capture worker, scheduler, private worker configuration
-and browser controls for these new routes still need composition and qualification.
+roles with synthetic data. The separate LTI-only worker now composes keyless capture,
+durable cadence and Gateway delivery; see [worker service](WORKER_SERVICE.md).
+Browser controls for these capture routes remain to be composed and qualified.
 
 ## Durable work still required in this batch
 
 Finish deployed retention policy and LTI
-worker/scheduler/browser composition through the existing Gateway outbox.
+browser composition through the existing Gateway outbox, plus deployed worker
+role/agent/network qualification. Worker mode and durable cadence are composed
+locally; this does not establish deployed production permissions or a live provider.
 Operator receipt and unknown-provider resolution are mounted as described above.
 An uncertain token exchange must
 not silently regenerate its attempt or assertion. Current registration, tool-key,

@@ -82,6 +82,9 @@ BEGIN
   INSERT INTO canvas_connector.lti_capture_routes(organization_id,id,producer_ref,platform_id,registration_id,definition,service_operation_id,enabled)
    VALUES(org,route,candidate->>'producerRef',platform,registration,candidate,service_operation,false) RETURNING * INTO saved;
  ELSIF action='schedule' THEN
+  -- An automatic scheduler can commit while this caller waits for parents.
+  -- It owns no capture advisory lock; never adopt its completed original ID.
+  IF EXISTS(SELECT 1 FROM canvas_connector.lti_capture_jobs WHERE organization_id=org AND capture_id=operation) THEN RETURN NULL; END IF;
   IF NOT old.enabled OR NOT canvas_connector.schedule_lti_capture(org,old.producer_ref,route,expected_route,operation) THEN RETURN NULL; END IF;
   SELECT * INTO scheduled FROM canvas_connector.lti_capture_jobs WHERE organization_id=org AND capture_id=operation;
   IF NOT FOUND THEN RAISE EXCEPTION 'LTI scheduled capture missing'; END IF;

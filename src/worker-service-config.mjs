@@ -15,7 +15,7 @@ export async function loadConnectorWorkerConfiguration(options={}) {
     const {path,signal,timeoutMs=1000}=options;
     const read=filename=>createPrivateTextFile({path:filename,timeoutMs,maxBytes:65536}).readText({signal});
     const configuration=parsePrivateJson(await read(path));
-    fields(configuration,['schemaVersion','database','keyCustody','canvas','gateway','refreshTargets','producers','pollIntervalMs','captureSchedules']);
+    fields(configuration,['schemaVersion','database','keyCustody','canvas','gateway','refreshTargets','producers','pollIntervalMs','captureSchedules','captureMode']);
     if(configuration.schemaVersion!==1) throw unavailable();
     const {database,keyCustody,canvas,gateway,refreshTargets,producers,pollIntervalMs}=configuration;
     fields(database,['host','port','database','user','caFile','passwordFile','maxConnections','connectTimeoutMs','queryTimeoutMs']);
@@ -23,6 +23,8 @@ export async function loadConnectorWorkerConfiguration(options={}) {
     fields(canvas,['caFile','allowedPrivateAddresses','timeoutMs','maxResponseBytes']);
     fields(gateway,['gatewayOrigin','caFile','timeoutMs']);
     if(!Array.isArray(refreshTargets)||refreshTargets.length>32||!Array.isArray(producers)||producers.length>32) throw unavailable();
+    if(configuration.captureMode!==undefined&&!['rest','lti'].includes(configuration.captureMode)
+      ||configuration.captureMode==='lti'&&(refreshTargets.length!==0||producers.length===0))throw unavailable();
     for(const target of refreshTargets) {
       fields(target,['organizationId','platformId']);if(!id(target.organizationId)||!id(target.platformId)) throw unavailable();
     }
@@ -65,6 +67,7 @@ export async function loadConnectorWorkerConfiguration(options={}) {
         apiKeyProvider:createConnectorGatewayApiKeyFile({path:identities[index+3].path,timeoutMs})})),
       ...(pollIntervalMs===undefined?{}:{pollIntervalMs}),
       ...(configuration.captureSchedules===undefined?{}:{captureSchedules}),
+      ...(configuration.captureMode===undefined?{}:{captureMode:configuration.captureMode}),
     };
   } catch {throw unavailable();}
 }

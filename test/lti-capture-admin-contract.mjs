@@ -8,6 +8,8 @@ import {createGatewayAdminAuthenticator} from '../src/gateway-admin-auth.mjs';
 import {createGatewayBindingReader} from '../src/gateway-binding-reader.mjs';
 import {createConnectorHttpsService} from '../src/connector-https-service.mjs';
 import {preflightLtiCaptureAdministration} from '../src/lti-capture-admin-preflight.mjs';
+import PgClient from 'pg/lib/client.js';
+import {ltiScheduledCaptureId} from '../src/lti-capture-scheduler.mjs';
 import {httpsFixture,json} from './support/canvas-https-fixture.mjs';
 
 export async function ltiCaptureAdminContract(configuration,{organizationId:org,platformId:platform,registrationId:registration,serviceOperationId:service,definition,ownerQuery}) {
@@ -60,6 +62,31 @@ export async function ltiCaptureAdminContract(configuration,{organizationId:org,
   await assert.rejects(lost.apply(replace,async()=>true,Date.now()+30000),/lti_capture_admin_unavailable/);
   assert.deepEqual((await store.replay(replace)).receipt,await apply(replace));assert.equal((await store.inspect(scope)).version,3);
   const live=await apply(command('activate',3));assert.equal(live.version,4);
+  // An automatic scheduler can commit while an administrator waits for the
+  // parent lock, after the administrator's first absence check.
+  const raceRoute='admin-race-route',raceProducer='admin-race-producer',raceDefinition={...definition,producerRef:raceProducer,bindingId:'lti-admin-race-binding'};
+  await ownerQuery(`INSERT INTO canvas_connector.lti_capture_routes(organization_id,id,producer_ref,platform_id,registration_id,definition,service_operation_id,enabled)
+   VALUES('${org}','${raceRoute}','${raceProducer}','${platform}','${registration}','${JSON.stringify(raceDefinition)}'::jsonb,'${service}',true);`);
+  const raceSchedule={organizationId:org,producerRef:raceProducer,routeId:raceRoute,configurationId:randomUUID(),expectedRevision:0,routeVersion:1,intervalMs:60000,enabled:true};
+  const raceId=ltiScheduledCaptureId(raceSchedule,1);
+  const blocker=new PgClient({host:configuration.host,port:configuration.port,database:configuration.database,user:'canvas_lti_capture_runtime',password:'synthetic-lti-capture-password',
+   ssl:{ca:configuration.ca,rejectUnauthorized:true},connectionTimeoutMillis:1000,query_timeout:5000,statement_timeout:5000});
+  await blocker.connect();let pending;
+  try {
+   await blocker.query('BEGIN');const pid=(await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+   await blocker.query('SELECT id FROM canvas_connector.platforms WHERE organization_id=$1 AND id=$2 FOR UPDATE',[org,platform]);
+   pending=apply({...command('schedule'),routeId:raceRoute,operationId:raceId}).then(value=>({value}),error=>({error}));
+   let waiting=false;
+   for(let i=0;i<40;i++) {
+    waiting=(await pool.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::integer=ANY(pg_blocking_pids(pid))) AS waiting',[pid])).rows[0].waiting;
+    if(waiting)break;await new Promise(r=>setTimeout(r,25));
+   }
+   assert.equal(waiting,true,'original admin operation reached its parent lock wait');
+   const automatic=(await blocker.query('SELECT canvas_connector.tick_lti_capture_schedule($1,$2,$3,$4::uuid,0,1,60000,true) AS result',[org,raceProducer,raceRoute,raceSchedule.configurationId])).rows[0].result;
+   assert.equal(automatic.capture.captureId,raceId);assert.equal(automatic.enqueued,true);await blocker.query('COMMIT');
+   const completed=await pending;if(completed.error)throw completed.error;assert.equal(completed.value,null);
+   assert.equal(await store.receipt({...scope,routeId:raceRoute,operationId:raceId}),null,'automatic capture cannot be adopted into an admin receipt');
+  }finally{await blocker.query('ROLLBACK').catch(()=>{});await pending;await blocker.end();}
   // Audit-time mutation of the newly scheduled job must roll back job and audit.
   await ownerQuery(`CREATE FUNCTION canvas_connector.synthetic_lti_admin_job() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
    BEGIN UPDATE canvas_connector.lti_capture_jobs SET phase='parked' WHERE organization_id=NEW.organization_id AND capture_id=NEW.operation_id;RETURN NEW;END;$$;

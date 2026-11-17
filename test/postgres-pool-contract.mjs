@@ -22,8 +22,9 @@ const f=JSON.parse(await readFile(file,'utf8'));
 const configuration={host:'localhost',port:f.port,database:'canvas_driver_test',user:'canvas_runtime',ca:f.ca,
   credentialProvider:{getPassword:async()=> 'synthetic-driver-runtime'},connectTimeoutMs:1000,queryTimeoutMs:2000,maxConnections:16};
 const pool=createConnectorPostgresPool(configuration);
-const keyProvider=createOpenBaoKeyProvider({openbaoOrigin:f.baoOrigin,mount:'connector-kv',keyPath:'canvas-envelope',
-  keyNamespace:'canvas',ca:f.baoCa,tokenProvider:{getToken:async()=>f.baoToken}});
+const keyCustody={openbaoOrigin:f.baoOrigin,mount:'connector-kv',keyPath:'canvas-envelope',
+  keyNamespace:'canvas',ca:f.baoCa,tokenProvider:{getToken:async()=>f.baoToken}};
+const keyProvider=createOpenBaoKeyProvider(keyCustody);
 const vault=createEncryptedVault({pool,keyProvider});
 const denied=operation=>assert.rejects(operation,error=>{
   assert.equal(error.message,'connector_database_unavailable');assert.equal(error.cause,undefined);return true;
@@ -62,7 +63,7 @@ try {
       assert.equal((await waiting.query('SELECT 1 AS ok')).rows[0].ok,1);assert.equal(calls,5,'late credentials are discarded; recovery obtains a new password');
     }finally{resumed=true;for(const resolve of release)resolve('synthetic-driver-runtime');await waiting.close();}
   }
-  await ltiServiceRuntimeContract(configuration,{keyProvider,ownerQuery:async sql=>{
+  await ltiServiceRuntimeContract(configuration,{keyProvider,keyCustody,ownerQuery:async sql=>{
     execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
   }});
   await initialOAuthCustodyContract(pool,{keyProvider,ownerQuery:async sql=>{
