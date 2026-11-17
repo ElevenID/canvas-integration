@@ -7,6 +7,51 @@ It does not yet associate that browser with a canonical Marty learner or create
 an application for that learner. The accepted provider receipt, numeric Canvas
 user ID, email and NRPS roles are not Marty ownership proofs.
 
+## Accumulating implementation branch
+
+`feat/connector-learner-association` now contains a server-only producer client
+for the public Gateway association API, an encrypted PostgreSQL attempt store
+and a lifecycle that reconciles original receipts before inspecting current
+state. These modules are not mounted in the connector HTTP runtime yet. The
+learner consent page, approved source/binding configuration and a composed
+connector-to-Gateway-to-Core database test remain required before enabling them.
+
+Owner migration `023_lti_association_attempts.sql` adds connector-local immutable
+intents and dispatch markers. The code is 32 random bytes encrypted with
+AES-256-GCM under connector custody; its authenticated context pins every
+immutable intent field. Only its SHA-256 hash goes to Gateway. One launch,
+source and binding retains one challenge and original operation ID across
+concurrent starts and restarts. A committed dispatch marker grants one network
+write. If its reply is lost, subsequent starts perform receipt lookup and current
+inspection; a crash before the write leaves an uncertain attempt requiring
+reconciliation or a fresh launch, rather than an automatic write retry.
+
+The store locks and rechecks the accepted launch, original browser proof,
+registration/platform versions, current provider identity revision and signed
+claim lifetime. Quarantined identities fail closed. Expiry is capped by that
+proof and two minutes. A final fence after database commit includes elapsed
+monotonic time, and the lifecycle checks again before returning a pending code.
+Committed records survive expiry failures. Terminal responses never include the
+code. These return values are server-only; no consent URL or browser transport
+is enabled by this module.
+
+The provider reference hashes the source and a random connector identity UUID,
+not an enumerable Canvas numeric ID or an email. It is a producer attestation,
+not canonical identity authority. Core independently validates the approved
+source grant and exact `identity:attest` API-key permission, current binding and
+application ownership; the authenticated learner must explicitly consent.
+Core cannot continuously query private connector state. Its bounded attestation
+does not claim instantaneous provider revocation; connector reconciliation and
+use must recheck local freshness. End-to-end freshness qualification remains
+open.
+
+The Core application-ownership dependency is PR
+[1982](https://github.com/ElevenID/marty-ui/pull/1982). The separate
+`feat/external-learner-association` backend adds source grants and challenge
+consent behind a default-off activation flag. Branch implementation and local
+tests do not establish deployment or replacement readiness. The requirements
+below remain the qualification contract.
+
 The public Gateway's external-observation binding administration is available.
 Core creates each binding from a locked current issuance application and derives
 its subject from that application. Capture administration reads that canonical
