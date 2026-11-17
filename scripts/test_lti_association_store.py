@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Disposable real PostgreSQL qualification; existing local Docker only."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import time
@@ -12,14 +13,29 @@ IMAGE = 'postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b3
 
 
 def main():
-    name = 'canvas-association-' + uuid.uuid4().hex
+    scope = uuid.uuid4().hex
+    name = 'canvas-association-' + scope
+    container_id = None
     def docker(*args, source=None):
-        return subprocess.run(['docker', *args], input=source, text=True, capture_output=True, check=True).stdout.strip()
-    docker('run', '--detach', '--name', name, '--label', 'elevenid.owner=canvas-association-test',
-           '--publish', '127.0.0.1::5432', '--env', 'POSTGRES_PASSWORD=synthetic-association-only', IMAGE)
+        return subprocess.run(['docker', *args], input=source, text=True, capture_output=True, check=True, timeout=30).stdout.strip()
+    # Never pull or allocate persistent PGDATA. Creation is covered by recovery
+    # even when the Docker acknowledgement is lost before we capture its ID.
+    image_id = json.loads(docker('image', 'inspect', IMAGE))[0]['Id']
+    tmpfs = {'/var/lib/postgresql/data': 'rw,nosuid,nodev,size=256m',
+             '/var/run/postgresql': 'rw,nosuid,nodev', '/tmp': 'rw,nosuid,nodev'}
     try:
+        arguments = ['create', '--pull=never', '--name', name, '--read-only',
+                     '--label', 'elevenid.owner=canvas-association-test',
+                     '--label', 'elevenid.test-scope=' + scope,
+                     '--publish', '127.0.0.1::5432',
+                     '--env', 'POSTGRES_PASSWORD=synthetic-association-only']
+        for target, options in tmpfs.items():
+            arguments.extend(['--tmpfs', target + ':' + options])
+        container_id = docker(*arguments, IMAGE)
+        print('Owned tmpfs PostgreSQL: ' + container_id, flush=True)
+        docker('start', container_id)
         for attempt in range(100):
-            if subprocess.run(['docker', 'exec', name, 'pg_isready', '-U', 'postgres'], capture_output=True).returncode == 0:
+            if subprocess.run(['docker', 'exec', name, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres'], capture_output=True, timeout=30).returncode == 0:
                 break
             time.sleep(.1)
         else:
@@ -27,7 +43,10 @@ def main():
         def sql(source):
             return docker('exec', '-i', name, 'psql', '-X', '-q', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1', source=source)
         for path in sorted((ROOT/'schema').glob('*.sql')):
-            sql(path.read_text(encoding='utf-8'))
+            try:
+                sql(path.read_text(encoding='utf-8'))
+            except subprocess.CalledProcessError as error:
+                raise RuntimeError('Synthetic fixture migration failed: ' + path.name + ': ' + error.stderr[:2048]) from error
         sql("""CREATE ROLE association_runtime LOGIN PASSWORD 'synthetic-runtime-only';
           GRANT USAGE ON SCHEMA canvas_connector TO association_runtime;
           GRANT SELECT ON canvas_connector.lti_launch_states,canvas_connector.lti_launch_receipts,
@@ -46,9 +65,30 @@ def main():
         port = docker('port', name, '5432/tcp').rsplit(':', 1)[1]
         environment = {**os.environ, 'CANVAS_ASSOCIATION_TEST_PORT': port}
         subprocess.run(['node', '--test', str(ROOT/'scripts/lti-association-store.contract.mjs')],
-                       cwd=ROOT, env=environment, check=True)
+                       cwd=ROOT, env=environment, check=True, timeout=120)
     finally:
-        docker('rm', '--force', name)
+        inspection = subprocess.run(['docker', 'inspect', name], text=True, capture_output=True, timeout=30)
+        if inspection.returncode:
+            if 'No such object:' not in inspection.stderr and 'No such container:' not in inspection.stderr:
+                raise RuntimeError('Cannot inspect owned fixture; preserve it for recovery')
+            if container_id is not None:
+                raise RuntimeError('Owned fixture disappeared before cleanup verification')
+        else:
+            candidate, = json.loads(inspection.stdout)
+            labels = candidate['Config'].get('Labels') or {}
+            if (candidate['Name'] != '/' + name or candidate['Image'] != image_id
+                    or candidate['Config']['Image'] != IMAGE
+                    or labels.get('elevenid.owner') != 'canvas-association-test'
+                    or labels.get('elevenid.test-scope') != scope
+                    or container_id is not None and candidate['Id'] != container_id
+                    or not candidate['HostConfig']['ReadonlyRootfs']
+                    or candidate['HostConfig'].get('Tmpfs') != tmpfs
+                    or any(mount['Type'] != 'tmpfs' for mount in candidate.get('Mounts', []))):
+                raise RuntimeError('Fixture identity or storage differs; preserve it for recovery')
+            if candidate['State']['Running']:
+                docker('stop', '--time', '5', candidate['Id'])
+            docker('rm', candidate['Id'])
+            print('Removed owned tmpfs PostgreSQL: ' + candidate['Id'], flush=True)
 
 
 if __name__ == '__main__':
