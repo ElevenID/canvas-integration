@@ -105,7 +105,10 @@ def main():
             fixture.write_text(json.dumps({'port':int(pgport.rsplit(':',1)[1]),'ca':(path/'server.crt').read_text(),
                 'untrustedCa':(path/'untrusted.crt').read_text(),'baoOrigin':'https://'+baoport,
                 'baoCa':docker('exec',bao,'cat','/tmp/canvas-tls/vault-ca.pem'),'baoToken':token,'baoFileToken':file_token}))
-            def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage,pg],check=True,cwd=ROOT,env=env,timeout=30)
+            # Initial qualification composes the LTI custody, capture and worker
+            # contracts as well as OAuth administration. Keep individual runtime
+            # deadlines intact while allowing this cumulative suite to finish.
+            def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage,pg],check=True,cwd=ROOT,env=env,timeout=180 if stage=='initial' else 30)
             node('initial')
             subprocess.run(['node',str(ROOT/'test/connector-oauth-runtime-contract.mjs'),str(fixture),pg,bao],check=True,cwd=ROOT,env=env,timeout=60)
             if arguments:
