@@ -9,6 +9,20 @@ const operation = { platformId: 'platform', action: 'integration-connector:edit'
 const incoming = cookie => ({ rawHeaders: ['Origin', admin, 'Cookie', cookie ?? 'session=synthetic-session-token; private=never-forward'] });
 const session = { authenticated: true, user: { user_id: 'user-one', organization_id: org } };
 
+test('outer dispatch cancellation closes the pending Gateway read and never starts a permission request',{timeout:3000},async()=>{
+  const fixture=await httpsFixture();
+  try {
+    let entered,closed;const requestEntered=new Promise(resolve=>{entered=resolve;}),socketClosed=new Promise(resolve=>{closed=resolve;});
+    fixture.setHandler(req=>{req.socket.once('close',closed);entered();});
+    const authenticate=createGatewayAdminAuthenticator({gatewayOrigin:fixture.origin,adminOrigin:admin,sessionCookieName:'session',ca:fixture.ca});
+    const already=new AbortController();already.abort();
+    await assert.rejects(authenticate(incoming(),{...operation,signal:already.signal}),/gateway_admin_auth_unavailable/);assert.equal(fixture.seen.length,0);
+    const controller=new AbortController(),pending=authenticate(incoming(),{...operation,signal:controller.signal});
+    await requestEntered;controller.abort();await assert.rejects(pending,/gateway_admin_auth_unavailable/);await socketClosed;
+    assert.equal(fixture.seen.length,1);
+  }finally{await fixture.close();}
+});
+
 test('authenticator uses only public Gateway session and current exact permissions', async () => {
   const fixture = await httpsFixture();
   try {

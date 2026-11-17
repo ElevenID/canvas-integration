@@ -19,6 +19,11 @@ import { createLtiLaunchLifecycle } from './lti-launch-lifecycle.mjs';
 import { createLtiRegistrationAdminStore } from './lti-registration-admin-store.mjs';
 import { preflightLtiRuntime } from './lti-runtime-preflight.mjs';
 import { createLtiProviderIdentityStore } from './lti-provider-identity-store.mjs';
+import { createLtiToolKeyStore } from './lti-tool-key-store.mjs';
+import { createLtiServiceStore } from './lti-service-store.mjs';
+import { createLtiServiceLifecycle } from './lti-service-lifecycle.mjs';
+import { createLtiServiceRecoveryStore } from './lti-service-recovery-store.mjs';
+import { preflightLtiServices } from './lti-service-preflight.mjs';
 
 const unavailable = () => new Error('connector_oauth_runtime_unavailable');
 function fields(value, allowed) {
@@ -32,7 +37,10 @@ export async function createConnectorOAuthRuntime(configuration) {
   try {
     fields(configuration, ['database', 'keyCustody', 'canvas', 'gatewayAuthentication', 'http', 'lti']);
     const { database, keyCustody, canvas, gatewayAuthentication, http, lti } = configuration;
-    if (lti !== undefined) fields(lti, ['selfManagedOriginAllowlist','allowedPrivateAddresses','ca','timeoutMs']);
+    if (lti !== undefined) {
+      fields(lti, ['selfManagedOriginAllowlist','allowedPrivateAddresses','ca','timeoutMs','services']);
+      if(lti.services!==undefined&&typeof lti.services!=='boolean')throw unavailable();
+    }
     fields(keyCustody, ['openbaoOrigin', 'mount', 'keyPath', 'keyNamespace', 'tokenProvider', 'ca', 'timeoutMs']);
     fields(gatewayAuthentication, ['gatewayOrigin', 'sessionCookieName', 'ca', 'timeoutMs']);
     fields(http, ['publicOrigin', 'completionUrl', 'tls', 'host', 'port', 'maxConcurrentRequests']);
@@ -42,11 +50,19 @@ export async function createConnectorOAuthRuntime(configuration) {
     pool = createConnectorPostgresPool(database);
     const repository = createPostgresRepository(pool);
     const secretVault = createEncryptedVault({ pool, keyProvider });
+    let ltiServices;
+    if(lti?.services===true) {
+      const keyStore=createLtiToolKeyStore({pool,keyProvider}),store=createLtiServiceStore({pool,keyProvider});
+      ltiServices={keyStore,store,recoveryStore:createLtiServiceRecoveryStore(pool),
+        lifecycle:createLtiServiceLifecycle({store,toolKeyStore:keyStore,canvasPolicy:{ca:lti.ca,
+          allowedPrivateAddresses:lti.allowedPrivateAddresses??[],timeoutMs:lti.timeoutMs??15000,maxResponseBytes:1048576}})};
+    }
     const lifecycle = createCanvasOAuthLifecycle({ publicOrigin: http.publicOrigin,
       completionUrl: http.completionUrl, repository, secretVault, provider,requireConfiguredClient:true });
-    service = createConnectorHttpsService({ ...http, lifecycle, authenticateAndAuthorize,
+    service = createConnectorHttpsService({ ...http, lifecycle, authenticateAndAuthorize,...(ltiServices===undefined?{}:{ltiServices}),
       ...(lti === undefined ? {} : {
-        ltiLifecycle:createLtiLaunchLifecycle({repository:createLtiLaunchRepository(pool),publicOrigin:http.publicOrigin,platformPolicy:lti}),
+        ltiLifecycle:createLtiLaunchLifecycle({repository:createLtiLaunchRepository(pool),publicOrigin:http.publicOrigin,
+          platformPolicy:Object.fromEntries(Object.entries(lti).filter(([key])=>key!=='services'))}),
         ltiRegistrationStore:createLtiRegistrationAdminStore(pool),
         ltiIdentityStore:createLtiProviderIdentityStore(pool),
         ltiSelfManagedOriginAllowlist:lti.selfManagedOriginAllowlist??[],
@@ -135,6 +151,7 @@ export async function createConnectorOAuthRuntime(configuration) {
         AND has_function_privilege(current_user,'canvas_connector.mark_authorization_pending(text,text,bigint,text)','EXECUTE') AS ready`);
       if (result?.rows?.length !== 1 || result.rows[0].ready !== true) throw unavailable();
       if (lti !== undefined) await preflightLtiRuntime(pool);
+      if(ltiServices!==undefined)await preflightLtiServices(pool);
       const policy = await pool.query('SELECT request_limit,window_ms,hits FROM canvas_connector.oauth_http_limit WHERE singleton=true');
       if (policy?.rows?.length !== 1 || !Number.isInteger(policy.rows[0].request_limit)
           || policy.rows[0].request_limit < 1 || policy.rows[0].request_limit > 1000

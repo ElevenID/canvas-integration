@@ -59,9 +59,10 @@ export function createLtiToolKeyStore({pool,keyProvider}={}) {
     const result=await pool.query(sql,values);if(!Array.isArray(result?.rows))unavailable();return result.rows;
   }
   return Object.freeze({
-    async administer(value) {
+    async administer(value,beforeCommit) {
       let key,plaintext;
       try {
+        if(beforeCommit!==undefined&&typeof beforeCommit!=='function')unavailable();
         const input=command(value),parameters=[input.organizationId,input.platformId,input.registrationId,input.operationId,input.actorId];
         const prior=await query(`SELECT platform_id AS "platformId",registration_id AS "registrationId",actor_id AS "actorId",request,receipt
           FROM canvas_connector.lti_tool_key_operation_audit WHERE organization_id=$1 AND operation_id=$2::uuid`,
@@ -92,6 +93,7 @@ export function createLtiToolKeyStore({pool,keyProvider}={}) {
           plaintext=Buffer.from(generated.privateKeyPem);const nonce=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,nonce,{authTagLength:16});
           cipher.setAAD(aad(metadata));sealed={nonce,ciphertext:Buffer.concat([cipher.update(plaintext),cipher.final()]),tag:cipher.getAuthTag()};
         }
+        if(beforeCommit!==undefined&&await beforeCommit()!==true)return null;
         const rows=await query(`SELECT canvas_connector.administer_lti_tool_key($1,$2,$3::uuid,$4::uuid,$5,
           $6,$7::bigint,$8::bigint,$9::bigint,$10::uuid,$11::jsonb,$12,$13,$14,$15) AS receipt`,
         [...parameters,input.action,input.expectedPlatformVersion,input.expectedRegistrationVersion,input.expectedKeyVersion,
@@ -100,6 +102,35 @@ export function createLtiToolKeyStore({pool,keyProvider}={}) {
         if(rows.length!==1||!Object.hasOwn(rows[0],'receipt'))unavailable();
         return rows[0].receipt===null?null:receipt(rows[0].receipt,input);
       }catch{unavailable();}finally{key?.fill(0);plaintext?.fill(0);}
+    },
+    async inspect(value) {
+      try {
+        exact(value,['organizationId','platformId','registrationId']);scope(value);
+        const rows=await query(`SELECT version::float8 AS version,current_kid AS "kid" FROM canvas_connector.lti_tool_key_configurations
+          WHERE organization_id=$1 AND platform_id=$2 AND registration_id=$3::uuid`,[value.organizationId,value.platformId,value.registrationId]);
+        if(rows.length===0)return null;if(rows.length!==1)unavailable();exact(rows[0],['version','kid']);
+        if(!ltiVersion(rows[0].version)||(rows[0].kid!==null&&!ltiUuid(rows[0].kid)))unavailable();
+        return Object.freeze({...rows[0]});
+      }catch{unavailable();}
+    },
+    async receipt(value) {
+      try {
+        exact(value,['organizationId','platformId','registrationId','operationId']);scope(value);if(!ltiUuid(value.operationId))unavailable();
+        const rows=await query(`SELECT actor_id AS "actorId",request,receipt FROM canvas_connector.lti_tool_key_operation_audit
+          WHERE organization_id=$1 AND platform_id=$2 AND registration_id=$3::uuid AND operation_id=$4::uuid`,
+        [value.organizationId,value.platformId,value.registrationId,value.operationId]);
+        if(rows.length===0)return null;if(rows.length!==1)unavailable();const old=rows[0];
+        const expected=command({...value,actorId:old.actorId,...old.request});return receipt(old.receipt,expected);
+      }catch{unavailable();}
+    },
+    async publicKeys(registrationId) {
+      try {
+        if(!ltiUuid(registrationId))unavailable();
+        const rows=await query(`SELECT canvas_connector.lti_tool_public_keys(id) AS keys FROM canvas_connector.lti_registrations WHERE id=$1::uuid`,[registrationId]);
+        if(rows.length===0)return null;if(rows.length!==1||!Array.isArray(rows[0].keys)||rows[0].keys.length>8)unavailable();
+        const keys=rows[0].keys.map(value=>publicJwk(value,value.kid));if(new Set(keys.map(value=>value.kid)).size!==keys.length)unavailable();
+        return Object.freeze({keys:Object.freeze(keys)});
+      }catch{unavailable();}
     },
     async current(value) {
       let key,partial,plaintext;

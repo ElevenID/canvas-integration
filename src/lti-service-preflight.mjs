@@ -72,6 +72,7 @@ export async function preflightLtiServices(pool) {
      AND NOT p.prosecdef AND NOT pg_has_role(current_user,p.proowner,'MEMBER'))
    AND NOT EXISTS(SELECT 1 FROM (VALUES
     ('lti_visible_identifier(text)'),('lti_service_read_scopes(text[])'),
+    ('lti_tool_public_keys(uuid)'),
     ('administer_lti_tool_key(text,text,uuid,uuid,text,text,bigint,bigint,bigint,uuid,jsonb,text,bytea,bytea,bytea)'),
     ('lti_service_attempt_view(canvas_connector.lti_service_attempts)'),('lti_service_attempt_current(canvas_connector.lti_service_attempts)'),
     ('lock_lti_service_configuration(canvas_connector.lti_service_attempts)'),

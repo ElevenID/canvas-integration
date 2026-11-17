@@ -1,10 +1,11 @@
 # Connector-owned LTI service adapters
 
-This larger local batch is in progress. The internal tool-key codec and bounded
-Canvas service client and internal key-custody adapter exist; durable token custody, administrator provisioning,
-capture scheduling/outbox composition, recovery and production runtime wiring are
-still required before this can replace the retained Core LTI service flow. These
-primitives are not mounted in the public server or exported from the package.
+This larger local batch is in progress. The optional operator service now mounts
+generated-key custody, public JWK discovery, durable credential exchange and recovery
+through Gateway-authorized actions. LTI capture/scheduling/outbox composition,
+remaining protocol services and deployed qualification are still required before
+this can replace the retained Core LTI service flow. Internal secret-bearing
+adapters are not package exports or public read APIs.
 
 `lti-tool-key-store.mjs` and owner-only migration016 add generated-only encrypted
 tool-key custody, immutable public JWK/operation history, revision-checked rotation
@@ -47,8 +48,8 @@ is reconciled from the same attempt without repeating the provider call. Public
 receipts contain references, versions, scopes and expiry; they contain no token.
 Current token reads recheck configuration and expiry after OpenBao lookup.
 
-These stores/lifecycle are still unmounted. Administrator/capture/worker composition
-and deployment retention policy remain required. A staged
+The stores/lifecycle are mounted only when the boolean `lti.services` is true.
+Capture/worker composition and deployment retention policy remain required. A staged
 token or historical published receipt is not permission to read provider data or
 submit evidence; Gateway's current canonical binding/application checks remain
 mandatory in the later capture pipeline.
@@ -102,8 +103,42 @@ It rejects elevated role flags, all MEMBER-reachable predefined PostgreSQL roles
 unauthorized INSERT/UPDATE columns, disabled/malformed guards, definer functions,
 unexpected function paths/ownership and nonordinary service tables. This is a
 capability/guard check rather than complete owner-schema provenance verification
-or a SQL sandbox deriving tenants from JWTs. Production bootstrap must invoke it
-before mounting these adapters; that bootstrap composition is still unfinished.
+or a SQL sandbox deriving tenants from JWTs. The OAuth bootstrap invokes it before
+listening when `lti.services` is true. Role and schema installation remain
+owner-managed; startup never supplies missing grants.
+
+## Operator and public routes
+
+Enable `"services": true` inside the private configuration's existing `lti` object,
+with the appropriate platform trust policy. Omission or `false` keeps the new routes
+disabled. The CLI preserves the boolean and separates it from the launch verifier's
+protocol policy. The selected runtime role must pass both launch and service checks.
+
+The operator console adds tool-key inspection/provision/rotation/deactivation,
+credential request/catalog/inspection/reconciliation, and service-attempt resolution.
+Every administrator request uses the current public Gateway session and exact
+`integration-connector:edit` permission. Organization and actor come from Gateway;
+the body cannot supply them. Authorization is checked again after key encryption,
+before a dispatch claim, after verified TLS before sending a client assertion, and
+before publishing a staged token. Dispatch cancellation propagates to pending Gateway
+reads. These checks do not create an atomic transaction across Gateway and PostgreSQL.
+
+`GET /lti/registrations/{registrationId}/jwks` publishes only six-field RSA public
+JWKs, without authenticating a browser session. Copy its inspected URL into the
+Canvas tool configuration. Current keys remain published; rotated keys have a
+ten-minute retirement grace. The set is bounded to eight: a ninth live key rotation
+is rejected rather than truncating a still-live key. A deactivation withdraws the
+whole set and creates a barrier, so later rotation cannot republish pre-deactivation
+keys. Historical audit/key rows remain retained. Discovery reads at most the nine
+latest immutable operation versions through an index; the mutation cap makes that
+window sufficient to include every live key. Responses are no-store and rate-limited.
+
+Administrator responses contain explicit public snapshots, references and receipts;
+they omit private PEM, bearer tokens and internal dispatch IDs. Bounded attempt
+catalog pages let an operator rediscover original IDs without repeating an exchange.
+The browser saves a receipt pointer before each mutation. A fresh-tab staged-token
+recovery saves/reuses its original attempt ID, never a replacement UUID. Unknown
+responses and post-commit permission loss retain that pointer through reload.
 
 Tool keys are newly generated connector-owned RSA keys. They are separate from
 credential signing/issuance keys. The internal provisioning adapter encrypts
@@ -144,8 +179,7 @@ NRPS roles remain provider data. Missing data is not a canonical negative assert
 
 ## Durable work still required in this batch
 
-Finish public operator key/credential/recovery workflows and JWK history; deployed
-retention policy and startup preflight composition; LTI
+Finish deployed retention policy and LTI
 capture configuration and worker composition through the existing Gateway outbox;
 and operator receipt/unknown-provider resolution. An uncertain token exchange must
 not silently regenerate its attempt or assertion. Current registration, tool-key,

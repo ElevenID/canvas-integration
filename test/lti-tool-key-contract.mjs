@@ -30,6 +30,10 @@ export async function ltiToolKeyContract(pool,{keyProvider,ownerQuery}) {
   const receipts=await Promise.all(Array.from({length:4},()=>store.administer(input)));
   for(const item of receipts)assert.deepEqual(item,receipts[0]);const first=receipts[0];
   assert.equal(first.version,1);assert.equal(first.action,'provision');assert.equal(first.publicJwk.kid,first.kid);
+  assert.deepEqual(await store.publicKeys(registrationId),{keys:[first.publicJwk]});
+  assert.equal(await store.publicKeys(randomUUID()),null);
+  assert.deepEqual(await store.inspect({organizationId,platformId,registrationId}),{version:1,kid:first.kid});
+  assert.deepEqual(await store.receipt({organizationId,platformId,registrationId,operationId:input.operationId}),first);
   assert.deepEqual(Object.keys(first.publicJwk).sort(),['alg','e','kid','kty','n','use']);
   const material=await store.current(selections);assert.equal(material.kid,first.kid);assert.match(material.privateKeyPem,/BEGIN PRIVATE KEY/);
   const persisted=(await pool.query('SELECT ciphertext FROM canvas_connector.lti_tool_keys WHERE kid=$1::uuid',[first.kid])).rows[0];
@@ -52,6 +56,7 @@ export async function ltiToolKeyContract(pool,{keyProvider,ownerQuery}) {
   const candidates=await Promise.all([store.administer(rotate),store.administer({...rotate,operationId:randomUUID()})]);
   assert.equal(candidates.filter(Boolean).length,1,'only one writer may advance the same revision');
   const second=candidates.find(Boolean);assert.equal(second.version,2);assert.notEqual(second.kid,first.kid);
+  assert.deepEqual((await store.publicKeys(registrationId)).keys.map(item=>item.kid),[second.kid,first.kid]);
   assert.equal(await store.current(selections),null);
   assert.equal((await store.current({...selections,expectedKeyVersion:2})).kid,second.kid);
   let dropped=false;
@@ -73,7 +78,18 @@ export async function ltiToolKeyContract(pool,{keyProvider,ownerQuery}) {
   const disabled=await store.administer({...input,operationId:randomUUID(),action:'deactivate',expectedPlatformVersion:null,
     expectedRegistrationVersion:null,expectedKeyVersion:3});
   assert.equal(disabled.version,4);assert.equal(disabled.kid,null);assert.equal(disabled.publicJwk,null);
+  assert.deepEqual(await store.publicKeys(registrationId),{keys:[]},'deactivation withdraws the whole public set');
   assert.equal((await pool.query('SELECT count(*)::float8 AS count FROM canvas_connector.lti_tool_keys WHERE organization_id=$1',[organizationId])).rows[0].count,3);
   assert.deepEqual(await store.administer(input),first,'historical receipt is stable after disable and platform drift');
+  await ownerQuery(`UPDATE canvas_connector.platforms SET enabled=true WHERE organization_id='${organizationId}' AND id='${platformId}';`);
+  let keyVersion=4;
+  for(let index=0;index<8;index++) {
+    const next=await store.administer({...rotate,operationId:randomUUID(),expectedPlatformVersion:3,expectedKeyVersion:keyVersion});
+    assert.notEqual(next,null);keyVersion=next.version;
+    assert.equal((await store.publicKeys(registrationId)).keys.length,index+1,'pre-deactivation keys never republish');
+  }
+  const count=(await pool.query('SELECT count(*)::float8 AS count FROM canvas_connector.lti_tool_keys WHERE organization_id=$1',[organizationId])).rows[0].count;
+  assert.equal(await store.administer({...rotate,operationId:randomUUID(),expectedPlatformVersion:3,expectedKeyVersion:keyVersion}),null,'ninth live JWK cannot silently truncate original keys');
+  assert.equal((await pool.query('SELECT count(*)::float8 AS count FROM canvas_connector.lti_tool_keys WHERE organization_id=$1',[organizationId])).rows[0].count,count,'bounded publication rejection leaves no orphan key');
   console.log('LTI tool key actual PostgreSQL/OpenBao encrypted custody, CAS, history, lost reply, context fences and deactivation PASS');
 }

@@ -69,6 +69,27 @@ $$;
 CREATE TRIGGER lti_tool_key_revision BEFORE UPDATE ON canvas_connector.lti_tool_key_configurations
  FOR EACH ROW EXECUTE FUNCTION canvas_connector.bump_lti_tool_key_configuration();
 
+CREATE UNIQUE INDEX lti_tool_key_public_versions ON canvas_connector.lti_tool_key_operation_audit
+ (registration_id,((receipt->>'version')::bigint));
+CREATE FUNCTION canvas_connector.lti_tool_public_keys(registration uuid)
+RETURNS jsonb LANGUAGE sql VOLATILE SET search_path=pg_catalog AS $$
+ WITH recent AS (
+  SELECT * FROM canvas_connector.lti_tool_key_operation_audit WHERE registration_id=registration
+   ORDER BY (receipt->>'version')::bigint DESC LIMIT 9
+ ), history AS (
+  SELECT organization_id,platform_id,registration_id,(receipt->>'version')::bigint AS version,
+   (receipt->>'kid')::uuid AS kid,request->>'action' AS action,
+   lead(created_at) OVER(ORDER BY (receipt->>'version')::bigint) AS retired_at
+  FROM recent
+ ), barrier AS (SELECT COALESCE(max(version),0) AS version FROM history WHERE action='deactivate')
+ SELECT COALESCE(jsonb_agg(k.public_jwk ORDER BY h.version DESC),'[]'::jsonb)
+ FROM history h JOIN canvas_connector.lti_tool_keys k
+  ON k.organization_id=h.organization_id AND k.platform_id=h.platform_id AND k.registration_id=h.registration_id AND k.kid=h.kid
+ JOIN canvas_connector.lti_tool_key_configurations c ON c.organization_id=h.organization_id AND c.platform_id=h.platform_id AND c.registration_id=h.registration_id
+ CROSS JOIN barrier b WHERE c.current_kid IS NOT NULL AND h.version>b.version
+  AND (h.kid=c.current_kid OR h.retired_at+interval '10 minutes'>clock_timestamp());
+$$;
+
 CREATE FUNCTION canvas_connector.administer_lti_tool_key(org text,platform text,registration uuid,operation uuid,actor text,
  requested_action text,expected_platform bigint,expected_registration bigint,expected_key bigint,
  requested_kid uuid,jwk jsonb,wrapping_key text,encrypted bytea,iv bytea,authentication_tag bytea)
@@ -128,6 +149,9 @@ BEGIN
   IF NOT FOUND OR saved.version IS DISTINCT FROM expected_key THEN RETURN NULL; END IF;
   intended_version:=expected_key+1;
  END IF;
+ -- Never truncate a still-live public key set. Deactivation is a barrier;
+ -- subsequent rotation cannot republish keys from before that barrier.
+ IF requested_action<>'deactivate' AND jsonb_array_length(canvas_connector.lti_tool_public_keys(registration))>=8 THEN RETURN NULL; END IF;
  IF requested_action<>'deactivate' THEN
   origin:=substring(reg.target_link_uri FROM '^(https://[^/[:space:]?#@]+)/lti/registrations/');
   IF origin IS NULL THEN RETURN NULL; END IF;
@@ -155,7 +179,8 @@ BEGIN
   'registrationId',registration,'version',intended_version,'kid',requested_kid,'publicJwk',jwk);
  INSERT INTO canvas_connector.lti_tool_key_operation_audit(organization_id,operation_id,platform_id,registration_id,actor_id,request,receipt)
   VALUES(org,operation,platform,registration,actor,intent,result);
- IF NOT EXISTS(SELECT 1 FROM canvas_connector.platforms p WHERE to_jsonb(p)=to_jsonb(host))
+ IF jsonb_array_length(canvas_connector.lti_tool_public_keys(registration))>8
+  OR NOT EXISTS(SELECT 1 FROM canvas_connector.platforms p WHERE to_jsonb(p)=to_jsonb(host))
   OR NOT EXISTS(SELECT 1 FROM canvas_connector.lti_registrations r WHERE to_jsonb(r)=to_jsonb(reg))
   OR NOT EXISTS(SELECT 1 FROM canvas_connector.lti_tool_key_configurations c WHERE to_jsonb(c)=to_jsonb(saved))
   OR (requested_action<>'deactivate' AND NOT EXISTS(SELECT 1 FROM canvas_connector.lti_tool_keys k WHERE to_jsonb(k)=to_jsonb(material)))
@@ -167,5 +192,6 @@ END;
 $$;
 REVOKE ALL ON canvas_connector.lti_tool_keys,canvas_connector.lti_tool_key_configurations,canvas_connector.lti_tool_key_operation_audit FROM PUBLIC;
 REVOKE ALL ON FUNCTION canvas_connector.keep_lti_tool_key_history(),canvas_connector.bump_lti_tool_key_configuration(),
+ canvas_connector.lti_tool_public_keys(uuid),
  canvas_connector.administer_lti_tool_key(text,text,uuid,uuid,text,text,bigint,bigint,bigint,uuid,jsonb,text,bytea,bytea,bytea) FROM PUBLIC;
 COMMIT;

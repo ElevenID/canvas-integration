@@ -83,7 +83,7 @@ export function createCanvasLtiServiceClient(configuration) {
               if(expired())fail('expired_credential');
               if(controller.signal.aborted)fail('timeout');
               if(socket.authorized!==true)fail('transport_error');
-              if(body!==undefined&&beforeTokenSend!==undefined&&await beforeTokenSend()!==true)fail('dispatch_denied');
+              if(body!==undefined&&beforeTokenSend!==undefined&&await beforeTokenSend(Object.freeze({signal:controller.signal}))!==true)fail('dispatch_denied');
               // The durable permit query may itself cross expiry or timeout.
               if(settled)return;
               if(expired())fail('expired_credential');

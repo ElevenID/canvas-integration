@@ -50,6 +50,8 @@ export function createGatewayAdminAuthenticator({ gatewayOrigin, adminOrigin, se
     });
   }
   return async (incoming, operation) => {
+    const outerSignal=operation?.signal;
+    if(outerSignal!==undefined&&(!(outerSignal instanceof AbortSignal)||outerSignal.aborted))fail();
     if (operation?.action !== 'integration-connector:edit'
         || typeof operation.platformId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(operation.platformId)) fail();
     const originValues = incoming.rawHeaders.filter((_, index) => index % 2 === 1
@@ -68,6 +70,9 @@ export function createGatewayAdminAuthenticator({ gatewayOrigin, adminOrigin, se
     const token = values[0].slice(sessionCookieName.length + 1);
     if (!/^[A-Za-z0-9._~-]{16,1024}$/.test(token)) return null;
     const controller = new AbortController();
+    const abort=()=>controller.abort();
+    if(outerSignal?.aborted)controller.abort();
+    else outerSignal?.addEventListener('abort',abort,{once:true});
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const cookie = `${sessionCookieName}=${token}`;
@@ -82,6 +87,6 @@ export function createGatewayAdminAuthenticator({ gatewayOrigin, adminOrigin, se
         && permissions.permissions.every(value => typeof value === 'string')
         && permissions.permissions.includes('integration-connector:edit');
       return Object.freeze({ organizationId: user.organization_id, actorId: user.user_id, authorized });
-    } catch { fail(); } finally { clearTimeout(timer); }
+    } catch { fail(); } finally { clearTimeout(timer);outerSignal?.removeEventListener('abort',abort); }
   };
 }

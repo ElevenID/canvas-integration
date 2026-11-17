@@ -26,6 +26,7 @@ export async function ltiServiceRuntimeContract(configuration,{keyProvider,owner
    ON canvas_connector.lti_service_tokens TO ${role};
   GRANT INSERT(organization_id,operation_id,platform_id,registration_id,attempt_id,actor_id,request,receipt) ON canvas_connector.lti_service_recovery_audit TO ${role};
   GRANT EXECUTE ON FUNCTION canvas_connector.lti_visible_identifier(text),canvas_connector.lti_service_read_scopes(text[]),
+   canvas_connector.lti_tool_public_keys(uuid),
    canvas_connector.administer_lti_tool_key(text,text,uuid,uuid,text,text,bigint,bigint,bigint,uuid,jsonb,text,bytea,bytea,bytea),
    canvas_connector.lti_service_attempt_view(canvas_connector.lti_service_attempts),canvas_connector.lti_service_attempt_current(canvas_connector.lti_service_attempts),
    canvas_connector.lock_lti_service_configuration(canvas_connector.lti_service_attempts),

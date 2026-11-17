@@ -49,6 +49,20 @@ export function createLtiServiceStore({pool,keyProvider}={}) {
   if(typeof result!=='boolean')unavailable();return result;
  }
  return Object.freeze({
+  async catalog(value) {
+   try {
+    ltiServiceExact(value,['organizationId','platformId','registrationId',...(value?.afterId===undefined?[]:['afterId'])]);
+    if(!ltiId(value.organizationId)||!ltiId(value.platformId)||!ltiUuid(value.registrationId)||(value.afterId!==undefined&&!ltiUuid(value.afterId)))unavailable();
+    const input={...value},result=await one(`SELECT COALESCE(jsonb_agg(item ORDER BY operation_id),'[]'::jsonb) AS result FROM
+     (SELECT operation_id,canvas_connector.lti_service_attempt_view(a) AS item FROM canvas_connector.lti_service_attempts a
+      WHERE organization_id=$1 AND platform_id=$2 AND registration_id=$3::uuid AND ($4::uuid IS NULL OR operation_id>$4::uuid)
+      ORDER BY operation_id LIMIT 21) page`,[input.organizationId,input.platformId,input.registrationId,input.afterId??null]);
+    if(!Array.isArray(result)||result.length>21)unavailable();
+    const attempts=result.map(value=>{const a=ltiServiceAttempt(value);
+     if(a.organizationId!==input.organizationId||a.platformId!==input.platformId||a.registrationId!==input.registrationId)unavailable();return a;});
+    return Object.freeze({attempts:Object.freeze(attempts.slice(0,20)),nextCursor:attempts.length>20?attempts[19].operationId:null});
+   }catch{unavailable();}
+  },
   async inspect(value) {try{return await inspect(ltiServiceHandle(value));}catch{unavailable();}},
   async prepare(value) {
    try {
@@ -113,10 +127,12 @@ export function createLtiServiceStore({pool,keyProvider}={}) {
     if(JSON.stringify(identity(staged))!==JSON.stringify(identity(a))||!['staged','published','resolved'].includes(staged.phase))unavailable();return staged;
    }catch{unavailable();}finally{key?.fill(0);plaintext?.fill(0);computed?.fill(0);}
   },
-  async publish(value) {
+  async publish(value,beforeCommit) {
    try {
+    if(beforeCommit!==undefined&&typeof beforeCommit!=='function')unavailable();
     const h=ltiServiceHandle(value,true),a=await inspect(h);
     if(a===null||a.dispatchId!==h.dispatchId)return null;
+    if(beforeCommit!==undefined&&await beforeCommit()!==true)return null;
     const result=await one('SELECT canvas_connector.publish_lti_service_token($1,$2::uuid,$3::uuid) AS result',[h.organizationId,h.operationId,h.dispatchId]);
     if(result===null)return null;
     const saved=await inspect(h);if(saved===null||!['published','resolved'].includes(saved.phase)||saved.receipt===null)unavailable();
