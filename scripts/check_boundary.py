@@ -22,6 +22,8 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/lti-tool-assertion.mjs': {'node:crypto','./canvas-rest-contract.mjs'},
  'src/lti-tool-key-store.mjs': {'node:crypto','./canvas-rest-contract.mjs','./lti-registration-contract.mjs','./lti-tool-assertion.mjs'},
  'src/lti-service-contract.mjs': {'./canvas-rest-contract.mjs','./lti-registration-contract.mjs'},
+ 'src/lti-capture-contract.mjs': {'./canvas-rest-contract.mjs','./canvas-rest-network.mjs','./lti-registration-contract.mjs','./lti-service-contract.mjs','./observation-submit.mjs'},
+ 'src/lti-capture-worker.mjs': {'./canvas-lti-service-client.mjs','./canvas-rest-network.mjs','./lti-registration-contract.mjs','./lti-service-contract.mjs','./lti-capture-contract.mjs'},
  'src/lti-service-store.mjs': {'node:crypto','./lti-registration-contract.mjs','./lti-service-contract.mjs'},
  'src/lti-service-lifecycle.mjs': {'node:crypto','./canvas-lti-service-client.mjs','./lti-service-contract.mjs'},
  'src/lti-service-recovery-store.mjs': {'./lti-registration-contract.mjs','./lti-service-contract.mjs'},

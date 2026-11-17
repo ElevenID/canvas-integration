@@ -177,11 +177,45 @@ members/results are ambiguous and rejected. Names, email, comments and unselecte
 provider fields are discarded. AGS scores do not imply completion or verification;
 NRPS roles remain provider data. Missing data is not a canonical negative assertion.
 
+## Capture foundation
+
+The internal keyless `createCanvasLtiServiceReader` exposes only GET operations.
+It accepts no signing key and has no token-exchange API. Each verified-TLS send,
+including each pagination page, requires a fresh read permit within the original
+token expiry and operation deadline. The service store checks the original
+published token reference and current platform/registration/key revisions without
+decrypting the bearer again for each permit.
+
+`lti-capture-contract.mjs` defines `canvas.ags_result` and
+`canvas.nrps_membership` queries as provider data. A configuration must match a
+fresh public Gateway binding's source, fact type, active application, revision,
+Canvas origin, registration, course, opaque provider user and resource link; AGS
+also names its line item, and NRPS its context. This validation produces query
+configuration only. Gateway still authorizes each submitted observation using
+its current canonical records.
+
+The internal capture worker uses an original published credential attempt. AGS
+reads first require the line-item metadata to match the configured resource link,
+then read the selected learner result. Only selected numeric score fields are
+projected, with no completion inference. NRPS projects the selected member's
+explicit status and discards roles and personal fields. Missing observations and
+transport failures produce no negative fact. Both APIs require explicit
+`as_of_read` timing, since these read results contain no provider event time.
+Lease and token permits are checked before every request. A lost completion
+acknowledgement requires reconciliation of the original capture, with no retry
+inside the worker.
+
+This foundation is not mounted in the daemon. The durable LTI route/job repository,
+atomic completion-and-outbox transaction, restricted-role startup checks, operator
+configuration and scheduler integration remain to be implemented and physically
+qualified. The worker's repository fixture tests do not establish those guarantees.
+
 ## Durable work still required in this batch
 
 Finish deployed retention policy and LTI
-capture configuration and worker composition through the existing Gateway outbox;
-and operator receipt/unknown-provider resolution. An uncertain token exchange must
+capture configuration and worker composition through the existing Gateway outbox.
+Operator receipt and unknown-provider resolution are mounted as described above.
+An uncertain token exchange must
 not silently regenerate its attempt or assertion. Current registration, tool-key,
 token, capture and canonical binding revisions must be fenced at their respective
 commit boundaries. Fresh service credentials alone confer no Marty authority.

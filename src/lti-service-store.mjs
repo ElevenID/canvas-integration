@@ -157,5 +157,18 @@ export function createLtiServiceStore({pool,keyProvider}={}) {
     return Object.freeze({accessToken,scopes:row.scopes,expiresAtMs:row.expiresAtMs});
    }catch{unavailable();}finally{key?.fill(0);partial?.fill(0);plaintext?.fill(0);computed?.fill(0);}
   },
+  async permitRead(value) {
+   try {
+    ltiServiceExact(value,['organizationId','operationId','tokenReference']);
+    if(!ltiId(value.organizationId)||!ltiUuid(value.operationId)||!ltiUuid(value.tokenReference))unavailable();
+    const input={...value},result=await one(`SELECT EXISTS(SELECT 1 FROM canvas_connector.lti_service_attempts a
+      JOIN canvas_connector.lti_service_tokens t ON t.organization_id=a.organization_id AND t.operation_id=a.operation_id
+       AND t.reference=a.token_reference
+      WHERE a.organization_id=$1 AND a.operation_id=$2::uuid AND a.token_reference=$3::uuid AND a.phase='published'
+       AND t.expires_at>clock_timestamp() AND canvas_connector.lti_service_attempt_current(a)) AS result`,
+     [input.organizationId,input.operationId,input.tokenReference]);
+    if(typeof result!=='boolean')unavailable();return result;
+   }catch{unavailable();}
+  },
  });
 }

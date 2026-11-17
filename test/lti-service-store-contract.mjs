@@ -48,10 +48,16 @@ export async function ltiServiceStoreContract(pool,{keyProvider,ownerQuery}) {
  const staged=await Promise.all([snapshotStore.stage(a,changing,expiry),...Array.from({length:3},()=>store.stage(a,bundle,expiry))]);
  assert.equal(mutated,true,'caller mutation happened while the original durable lookup was pending');
  for(const item of staged)assert.deepEqual(item,staged[0]);assert.equal(staged[0].phase,'staged');
+ const readHandle={...handle(a),tokenReference:staged[0].tokenReference};
+ assert.equal(await store.permitRead(readHandle),false,'staged token is not read permission');
  assert.equal(await store.permitDispatch(dispatch(a)),false);
  assert.equal(await store.stage(a,{...bundle,accessToken:'synthetic_changed_lti_token_00002'},expiry),null,'changed plaintext is not an original-input replay');
  const receipt=await store.publish(dispatch(a));assert.equal(receipt.tokenReference,staged[0].tokenReference);assert.equal(Object.hasOwn(receipt,'accessToken'),false);
  assert.deepEqual(await store.publish(dispatch(a)),receipt);assert.deepEqual(await store.currentToken(handle(a)),{...bundle,expiresAtMs:expiry});
+ assert.equal(await store.permitRead(readHandle),true);
+ assert.equal(await store.permitRead({...readHandle,organizationId:'foreign'}),false);
+ assert.equal(await store.permitRead({...readHandle,operationId:randomUUID()}),false);
+ assert.equal(await store.permitRead({...readHandle,tokenReference:randomUUID()}),false);
  const storage=(await pool.query('SELECT ciphertext FROM canvas_connector.lti_service_tokens WHERE organization_id=$1',[organizationId])).rows;
  assert.equal(storage.length,1);assert.equal(storage[0].ciphertext.includes(Buffer.from(bundle.accessToken)),false);
  const tampered=createLtiServiceStore({keyProvider,pool:{async query(sql,values){
@@ -108,6 +114,7 @@ export async function ltiServiceStoreContract(pool,{keyProvider,ownerQuery}) {
  }}});
  assert.equal(await delayed.currentToken(handle(a)),null);
  assert.equal(await store.currentToken(handle(second)),null);
+ assert.equal(await store.permitRead(readHandle),false,'disabled platform invalidates previously published read permission');
  assert.deepEqual(await store.publish(secondHandle),original,'historical receipt readback is not current token authority');
  console.log('LTI service actual PG/OpenBao attempt identity/single dispatcher/ciphertext stage/CAS/unknown replies/digests/current fences PASS');
 }
