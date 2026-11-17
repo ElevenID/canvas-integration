@@ -1,13 +1,15 @@
 # Connector-owned Canvas provider identity
 
 The connector owns a provider-only opaque-to-numeric identity observation registry.
-The old Core launch modules remain pending qualified retirement. Migration014, the signed
+Canvas launch custody belongs in the connector; platform removal does not wait
+for production LTI qualification. Migration014, the signed
 claim decoder, production repository and bounded HTTP adapter are composed by
 the explicitly enabled LTI runtime. The owner must install the migration and
 selected runtime grants; startup checks the additional capabilities and guards.
 There is no runtime DDL, grants, in-memory fallback or replacement transport hook.
-Canonical Gateway learner association and deployed replacement qualification
-remain required before retiring the existing Core flow.
+Canonical Gateway learner association and deployment qualification remain
+activation TODOs, with dependent flows disabled. They do not block retiring the
+legacy Core Canvas flow. See [the split boundary](BOUNDARY.md#deferred-work).
 
 Only `canvas_user_id` inside the verified LTI custom claim can supply a numeric
 Canvas identifier. It is normalized with the same unsigned64-bit identifier

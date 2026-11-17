@@ -137,10 +137,10 @@ operation reuse fails. A lost reply must reconcile the same operation without
 silently creating a new challenge, ownership assignment or application. Historical
 receipts do not restore current ownership or binding authority.
 
-## Qualification before replacing the legacy flow
+## Deferred qualification before activation
 
-Use actual local PostgreSQL and HTTPS peers, then the existing authorized AWS
-development deployment. Cover wrong learner/browser/tenant/source/binding,
+When activating this flow, use actual local PostgreSQL and HTTPS peers, then a
+separately authorized development deployment. Cover wrong learner/browser/tenant/source/binding,
 forged provider identity, stale or changed ownership/application/binding/grant,
 permission loss, expiry during authorization and lock waits, concurrent confirms,
 conflicting operation reuse, lost committed replies, rollback, restart and
@@ -149,4 +149,6 @@ network denial. Verify original receipts and no duplicate application or grant.
 Real browser checks must cover explicit consent, tenant switching, rejected and
 expired challenges, recovery after reload and private data absence. Finally
 qualify the resulting unsigned observation through the actual public Gateway
-and OB3 wallet flow before removing the legacy Core Canvas bootstrap/claim paths.
+and OB3 wallet flow before enabling this connector flow. These checks do not block
+removal of the legacy Canvas bootstrap/claim paths from the platform; unsupported
+flows remain disabled. See [split scope and deferred work](BOUNDARY.md#deferred-work).

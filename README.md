@@ -7,13 +7,17 @@ service credentials, signing grants or private source packages is unsupported.
 
 ## Implemented slices
 
-The dependency-free, server-only Gateway client adapts Marty-ui's Canvas
-administration API module: twelve reads and ten explicitly opted-in management
-operations. Its HTTP owner fixes the Gateway origin and organization, requires
-`X-API-Key`, verifies TLS, refuses redirects and bounds responses and time.
-Application approval, signing, secret export, correction-review writes and bulk
-mirror processing are absent. Browser imports fail. The read-only CLI loads its
-key from a private file and emits a count rather than returned records.
+The connector owns Canvas administration, credentials, OAuth/LTI state, REST
+capture and delivery scheduling. Canonical identities, application ownership,
+approval, evidence policy and credential signing remain platform-owned.
+The public Gateway adapters use provider-neutral operations; see the
+[contract and responsibility map](docs/BOUNDARY.md).
+
+The former Canvas administration compatibility client is retired. Its package
+root throws `retired_gateway_api` before reading credentials or making requests.
+The operation registry, configuration export and `npm run probe` are removed.
+Use the explicit `./observations` export for unsigned evidence submission and
+the connector service for local administration. There is no direct-service fallback.
 
 The separate **Canvas REST evidence reader** supports assignment/assignment-backed
 quiz scores, module completion and course progress. Its token can only reach a
@@ -35,12 +39,12 @@ encrypted vault, OpenBao, Canvas token exchange and Gateway session authenticati
 Durable delivery and REST capture have separate contracts. See
 [HTTPS service](docs/HTTPS_SERVICE.md) for listener configuration and shutdown.
 
-**Standalone deployment and extraction remain incomplete.** Production credential
-loading, deployment ingress controls, worker scheduling,
-LTI/AGS/NRPS and administration pages still need work. The compatibility Gateway
-client addresses existing Canvas APIs until their replacement is qualified.
-No deployment is cut over; the original Marty implementation remains for
-qualification and subsequent retirement.
+**The repository split does not require production-ready integration.**
+Provider UI and runtime removal in Marty is proceeding independently of connector
+production qualification. Incomplete flows stay disabled; deployment, AGS/NRPS,
+unknown OAuth recovery and cutover remain owned TODOs in
+[the boundary document](docs/BOUNDARY.md#deferred-work).
+No production cutover is claimed.
 
 ## Test
 
@@ -53,7 +57,7 @@ npm run check
 ```
 
 Tests use actual local HTTPS peers and freshly generated temporary certificates.
-They cover Gateway operations, tenant/header binding, read-only defaults, Canvas
+They cover generic Gateway operations, tenant/session binding, retired API rejection, Canvas
 resource identity, score/module/course normalization, OAuth state/tenant binding,
 one-time callback consumption, connector-owned secret references, token exchange,
 redirection, TLS failures, DNS/IP policies, bounded responses/deadlines and
@@ -61,52 +65,16 @@ cross-client credential isolation. Mutation tests reject internal imports, core
 credentials in provider modules, alternate transports, browser exports, TLS
 bypass, removed DNS pinning and weakened OAuth state handling.
 
-## Read-only Gateway probe
+## Gateway use
 
-Create a dedicated organization API key with **only `integrations:read`** in the
-normal ElevenID console. Store it outside the repository in a regular file
-readable only by its owner (mode 0600 on POSIX). Do not place it in argv or a
-browser bundle. Supply your installation's public Gateway origin, not an
-issuance/signing service URL.
+All connector-to-platform requests go to one explicitly configured public Common
+Gateway HTTPS origin. API-key submissions use the dedicated `evidence:submit`
+scope; browser administration uses the authenticated user's Gateway session.
+Neither credential authorizes direct Core access. Gateway enforces tenant,
+resource, scope and policy checks independently of this connector.
 
-```sh
-export MARTY_GATEWAY_ORIGIN=https://gateway.example.org
-export MARTY_ORGANIZATION_ID=YOUR_ORGANIZATION_ID
-export MARTY_GATEWAY_API_KEY_FILE=/run/secrets/canvas-gateway-key
-# Only for a Gateway using your explicitly approved private CA:
-# export MARTY_GATEWAY_CA_FILE=/run/config/gateway-ca.pem
-npm run probe
-```
-
-The probe performs one `listCanvasPlatforms` request. It does not seed, approve,
-issue, sign, migrate or change any deployment. Error messages never include the
-key, upstream response body or configured URL.
-
-## Server-side use
-
-```js
-import { createGatewayClient } from '@elevenid/canvas-integration';
-import { loadConfiguration } from '@elevenid/canvas-integration/configuration';
-const client = createGatewayClient(await loadConfiguration());
-const platforms = await client.execute('listCanvasPlatforms');
-```
-
-Management operations require explicitly replacing `allowedOperations` with
-reviewed operation names. Creates additionally require a caller-persisted
-`idempotencyKey` (16-128 safe characters), reused for the same logical request.
-There are **no automatic write retries**. A network failure can leave the result
-unknown: reconcile through a read before retrying. Header preservation is
-covered here; actual Gateway idempotency remains an integration acceptance gate.
-
-The compatibility client rejects `canvas_credentials`, access/refresh tokens,
-client secrets and private-key fields, including inside nested management data.
-Provision provider credentials through the connector-owned administration service.
-
-The operation allowlist does not narrow an overprivileged key on the server.
-Gateway key scope/tenant checks and deployment network policy remain independent
-security boundaries. Do not use `integrations:write` for the normal reader.
-
-See `docs/BOUNDARY.md` for restrictions, migration gates and unverified work.
+See [observation submission](docs/OBSERVATION_SUBMIT.md) for the supported producer
+API and [the boundary map](docs/BOUNDARY.md) for other generic contracts.
 Source provenance is in `NOTICE.md`; licensing is in `LICENSE`.
 
 The server-only `./postgres-pool` adapter supplies verified-TLS, bounded autocommit transport for the connector database. See [PostgreSQL driver](docs/POSTGRES_DRIVER.md) for explicit credential wiring, failure semantics and actual PostgreSQL/OpenBao/vault qualification.
@@ -130,7 +98,8 @@ The [initial OAuth custody adapters](docs/INITIAL_OAUTH_CUSTODY.md) persist
 exchange attempts and atomically stage encrypted token references in the actual
 callback. The [operator recovery API](docs/OAUTH_ATTEMPT_RECOVERY.md) adds bounded
 inspection, immutable operation receipts and staged-token revocation disposition.
-Operator UI, unknown-provider resolution and production qualification remain required.
+Unknown-provider resolution and production qualification remain activation TODOs;
+see the [current operator console](docs/OPERATOR_CONSOLE.md) for implemented UI.
 
 The [connection administration API](docs/CONNECTION_ADMINISTRATION.md) provides
 Gateway-authorized status, generation/revision-fenced disconnect and durable

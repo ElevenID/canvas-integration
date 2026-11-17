@@ -15,11 +15,6 @@
       "node": "./src/gateway-client.mjs",
       "default": "./src/browser-denied.mjs"
     },
-    "./configuration": {
-      "browser": "./src/browser-denied.mjs",
-      "node": "./src/configuration.mjs",
-      "default": "./src/browser-denied.mjs"
-    },
     "./canvas-rest": {
       "browser": "./src/browser-denied.mjs",
       "node": "./src/canvas-rest-reader.mjs",
@@ -140,7 +135,6 @@
     "test": "node --test test/*.test.mjs",
     "check:boundary": "python3 scripts/check_boundary.py",
     "check": "npm run check:boundary && npm test",
-    "probe": "node bin/probe.mjs",
     "start:oauth": "node bin/serve-oauth.mjs",
     "start:workers": "node bin/serve-workers.mjs"
   },
