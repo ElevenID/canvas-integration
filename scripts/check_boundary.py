@@ -74,6 +74,7 @@ IMPORTS = {'bin/probe.mjs': {'../src/gateway-client.mjs', '../src/configuration.
  'src/private-json.mjs': set(),
  'src/gateway-admin-auth.mjs': {'node:https'},
  'src/gateway-binding-reader.mjs': {'node:https', './gateway-admin-auth.mjs', './private-json.mjs'},
+ 'src/gateway-ownership-client.mjs': {'node:https', './private-json.mjs'},
  'src/gateway-client.mjs': {'./operations.mjs', 'node:https'},
  'src/observation-outbox.mjs': {'./observation-submit.mjs'},
  'src/observation-submit.mjs': {'node:https'},
