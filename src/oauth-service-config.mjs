@@ -24,7 +24,11 @@ export async function loadConnectorOAuthConfiguration(options = {}) {
     const { database, keyCustody, http, gatewayAuthentication } = configuration;
     const canvas = configuration.canvas === undefined ? {} : configuration.canvas;
     const lti = configuration.lti;
-    if (lti !== undefined) fields(lti, ['selfManagedOriginAllowlist','allowedPrivateAddresses','caFile','timeoutMs']);
+    if (lti !== undefined) {
+      fields(lti, ['selfManagedOriginAllowlist','allowedPrivateAddresses','caFile','timeoutMs','services','captures']);
+      if(lti.services!==undefined&&typeof lti.services!=='boolean')throw unavailable();
+      if(lti.captures!==undefined&&typeof lti.captures!=='boolean'||lti.captures===true&&lti.services!==true)throw unavailable();
+    }
     fields(database, ['host', 'port', 'database', 'user', 'caFile', 'passwordFile', 'maxConnections', 'connectTimeoutMs', 'queryTimeoutMs']);
     fields(keyCustody, ['openbaoOrigin', 'mount', 'keyPath', 'keyNamespace', 'caFile', 'tokenFile', 'timeoutMs']);
     fields(gatewayAuthentication, ['gatewayOrigin', 'sessionCookieName', 'caFile', 'timeoutMs']);

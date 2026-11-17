@@ -87,7 +87,11 @@ available. Reload keeps pending pointers, but closing the tab may discard them.
 Copy the original IDs before closing it.
 
 A matching receipt resolves the pointer. Known adapter rejection statuses remove
-it without resubmission. Transport errors, server failures and malformed or
+it without resubmission. LTI key, credential and resolution changes retain their
+pointer after a `403`, since permission may have changed after a commit. Credential
+recovery records or reuses the original attempt ID before sending; it never creates
+a replacement exchange ID and retains the pointer after any unconfirmed reply.
+Transport errors, server failures and malformed or
 mismatching success responses retain it and block another mutation from that form.
 Use **Inspect original receipt**. Missing receipts are snapshots, not proof of
 rollback; keep the original ID and reconcile the same intent. Nothing generates
@@ -101,6 +105,15 @@ no-store/no-referrer. These controls do not make browser storage a security boun
 against a compromised same-origin application or browser profile.
 
 ## Qualification and remaining work
+
+When private configuration enables `lti.services`, the console also provides
+tool-key/public-JWK inspection, generated-key provisioning and rotation, credential
+requests, bounded attempt catalog pages, staged-result recovery and explicit attempt
+resolution. Private keys and service tokens are never returned to the browser.
+Unknown-outcome resolution labels external disposition as an operator attestation;
+the server checks disabled platform/registration and deactivated-key revisions.
+Use the inspected public JWK URL in the Canvas tool configuration. The full key,
+expiry and recovery behavior is described in [LTI services](LTI_SERVICES.md).
 
 `python scripts/test_postgres_pool.py --operator-browser-tests /absolute/path/to/playwright/index.mjs`
 runs separately installed, lock-pinned Playwright1.59.1 with the actual connector

@@ -18,6 +18,7 @@ import { createConnectorOAuthRuntime } from '../src/connector-oauth-runtime.mjs'
 import { createConnectorDatabasePasswordFile, createConnectorOpenBaoTokenFile } from '../src/file-credentials.mjs';
 import { httpsFixture, json } from './support/canvas-https-fixture.mjs';
 import { captureRouteHttpContract } from './capture-route-http-contract.mjs';
+import { ltiServiceHttpContract } from './lti-service-http-contract.mjs';
 import { ltiRuntimeHttpContract } from './lti-runtime-http-contract.mjs';
 const file = process.argv[2], container = process.argv[3], baoContainer = process.argv[4];
 assert.match(file ?? '', /canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);
@@ -491,6 +492,7 @@ try {
   try { await captureRouteHttpContract({send,address:secondAddress,organizationId:org,canvasOrigin:canvas.origin,pool,
     limitedPool:captureLimitedPool,gateway,owner,bindings,setBindingAllowed:value=>{bindingAllowed=value;}}); }
   finally {await captureLimitedPool.close();}
+  await ltiServiceHttpContract(configuration,{pool,owner});
 
   permitted = false;
   assert.equal((await send(secondAddress, { body: 'client_id=runtime-client' }).response).status, 403);

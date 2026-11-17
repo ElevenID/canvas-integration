@@ -13,6 +13,8 @@ import { connectionAdministrationContract } from './connection-admin-contract.mj
 import { platformAdministrationContract } from './platform-admin-contract.mjs';
 import { oauthClientProvisioningContract } from './oauth-client-provisioning-contract.mjs';
 import { captureRouteAdministrationContract } from './capture-route-admin-contract.mjs';
+import { createConnectorDatabasePasswordFile } from '../src/file-credentials.mjs';
+import { ltiServiceRuntimeContract } from './lti-service-runtime-contract.mjs';
 
 const file=process.argv[2];const stage=process.argv[3];
 assert.match(file??'',/canvas-driver-contract-[^/\\]+[/\\]synthetic-fixture\.json$/);
@@ -20,8 +22,9 @@ const f=JSON.parse(await readFile(file,'utf8'));
 const configuration={host:'localhost',port:f.port,database:'canvas_driver_test',user:'canvas_runtime',ca:f.ca,
   credentialProvider:{getPassword:async()=> 'synthetic-driver-runtime'},connectTimeoutMs:1000,queryTimeoutMs:2000,maxConnections:16};
 const pool=createConnectorPostgresPool(configuration);
-const keyProvider=createOpenBaoKeyProvider({openbaoOrigin:f.baoOrigin,mount:'connector-kv',keyPath:'canvas-envelope',
-  keyNamespace:'canvas',ca:f.baoCa,tokenProvider:{getToken:async()=>f.baoToken}});
+const keyCustody={openbaoOrigin:f.baoOrigin,mount:'connector-kv',keyPath:'canvas-envelope',
+  keyNamespace:'canvas',ca:f.baoCa,tokenProvider:{getToken:async()=>f.baoToken}};
+const keyProvider=createOpenBaoKeyProvider(keyCustody);
 const vault=createEncryptedVault({pool,keyProvider});
 const denied=operation=>assert.rejects(operation,error=>{
   assert.equal(error.message,'connector_database_unavailable');assert.equal(error.cause,undefined);return true;
@@ -31,6 +34,38 @@ try {
  if(stage==='initial') {
   const container=process.argv[4];
   assert.match(container??'',/^canvas-pg-driver-[a-f0-9]{32}$/);
+  if(process.platform!=='win32') {
+    const privatePath=file+'.database-password';
+    await writeFile(privatePath,'synthetic-driver-runtime\n',{mode:0o600});
+    const reader=createConnectorDatabasePasswordFile({path:privatePath});let reads=0,reading=0,peak=0;
+    const provider={async getPassword(options){reads++;reading++;peak=Math.max(peak,reading);
+      try{return await reader.getPassword(options);}finally{reading--;}}};
+    const cold=createConnectorPostgresPool({...configuration,credentialProvider:provider,maxConnections:16});
+    try {
+      const queries=await Promise.all(Array.from({length:16},()=>cold.query('SELECT 1 AS ok')));
+      assert.equal(queries.length,16);assert.ok(queries.every(result=>result.rows[0].ok===1));assert.equal(reads,16);assert.ok(peak<=4);
+    } finally {await cold.close();}
+    const pair=Array.from({length:2},()=>createConnectorPostgresPool({...configuration,credentialProvider:provider,maxConnections:8}));
+    try {
+      await Promise.all(pair.flatMap(selected=>Array.from({length:8},()=>selected.query('SELECT 1 AS ok'))));
+      assert.equal(reads,32,'each cold connection obtains fresh credentials');assert.ok(peak<=4,'shared providers keep the same four-reader bound across pools');
+    } finally {await Promise.all(pair.map(selected=>selected.close()));}
+    console.log('Actual POSIX private reader/fresh acquisition/four-I/O budget across16 cold TLS connections and shared pools PASS');
+  }
+  {
+    let calls=0,resumed=false;const release=[];
+    const provider={getPassword(){calls++;return resumed?'synthetic-driver-runtime':new Promise(resolve=>release.push(resolve));}};
+    const waiting=createConnectorPostgresPool({...configuration,credentialProvider:provider,connectTimeoutMs:250,maxConnections:8});
+    try {
+      const results=await Promise.allSettled(Array.from({length:5},()=>waiting.query('SELECT 1 AS ok')));
+      assert.ok(results.every(result=>result.status==='rejected'));assert.equal(calls,4,'timed-out queued acquisition never calls the provider');
+      resumed=true;for(const resolve of release)resolve('synthetic-driver-runtime');await new Promise(resolve=>setImmediate(resolve));
+      assert.equal((await waiting.query('SELECT 1 AS ok')).rows[0].ok,1);assert.equal(calls,5,'late credentials are discarded; recovery obtains a new password');
+    }finally{resumed=true;for(const resolve of release)resolve('synthetic-driver-runtime');await waiting.close();}
+  }
+  await ltiServiceRuntimeContract(configuration,{keyProvider,keyCustody,ownerQuery:async sql=>{
+    execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
+  }});
   await initialOAuthCustodyContract(pool,{keyProvider,ownerQuery:async sql=>{
     execFileSync('docker',['exec','-i',container,'psql','-X','-q','-U','postgres','-d','canvas_driver_test','-v','ON_ERROR_STOP=1'],{input:sql,encoding:'utf8'});
   }});

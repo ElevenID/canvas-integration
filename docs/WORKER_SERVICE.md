@@ -6,7 +6,7 @@ standalone worker process is separate from the OAuth HTTP process and uses its
 own connector database login. It opens no inbound listener and has no Core
 database, private service, session, signer or issuance integration.
 
-The concrete runtime composes the connector PostgreSQL pool, read-only OpenBao
+By default, the concrete runtime composes the connector PostgreSQL pool, read-only OpenBao
 key provider, encrypted vault and existing refresh/revocation/capture/delivery
 workers. It never accepts repository, transport or task replacements in its
 configuration. The public Common Gateway observation submitter is its only
@@ -73,6 +73,40 @@ These tests do not establish production grants, ownership, schema provenance or
 full least privilege. Provision and approve actual roles separately; no role is
 created by startup. Keep encryption keys for all retained tokens, attempts and
 backups until their reviewed retention/disposition is complete.
+
+## LTI-only worker
+
+Set `"captureMode": "lti"` in a separate private worker configuration, with
+`refreshTargets: []` and at least one producer slot. See
+`deploy/lti-worker-service.example.json`. Omission retains the REST worker mode.
+LTI mode constructs no OAuth provider, OAuth vault, refresh, revocation or REST
+capture tasks. It reads original published LTI credentials, performs keyless
+AGS/NRPS reads and delivers only unsigned observations through the public Gateway.
+It does not exchange credentials or generate/sign tool assertions.
+
+Provision a separate database role. The LTI preflight requires only the signing-key
+metadata columns used for revision checks and rejects private signing-key columns,
+OAuth-secret access, operator-audit writes, sequence-reset privileges, mutable
+history, excessive column writes and reachable privileged roles. Hidden
+INHERIT FALSE memberships are included. Row-lock columns remain explicit; this
+is a capability/guard check, not a tenant SQL sandbox or complete schema provenance
+proof. The HTTP administration/signing role cannot be reused for this worker.
+
+LTI mode consumes already queued captures unless `captureSchedules` is configured.
+The policy fields match the REST cadence policy, but refer to an LTI capture route.
+Owner migration021 installs separate immutable LTI cadence receipts and pins the
+retained platform guard's search path. Each configuration UUID/revision has its own
+durable cursor. Capture UUIDs derive from SHA256 over the organization, producer,
+route, configuration and ordinal. A restart retains the same IDs and cursor.
+Pending/parked captures and unacknowledged deliveries stop allocation of later
+captures. Disabled or superseded configurations cannot silently resume production.
+Expired/currently invalid service credentials pause capture rather than triggering
+another credential exchange. Cadence creates no Core grant or learner association.
+
+Startup requires the owner-installed LTI storage/scheduling migrations and explicit
+capture/outbox/cadence capabilities. It creates no roles or grants. SIGTERM drains
+the current operation before closing, including a pending Gateway acknowledgment.
+Both modes use the same private credential-file checks and fresh Gateway key reads.
 
 Qualification includes actual TLS PostgreSQL/OpenBao/Canvas/Gateway fixtures,
 refresh/revocation/capture/delivery, configured-scope isolation and drain/restart

@@ -69,6 +69,12 @@ def main():
             sql((ROOT/'schema/013_lti_registration_administration.sql').read_text(encoding='utf-8'))
             sql((ROOT/'schema/014_lti_provider_identities.sql').read_text(encoding='utf-8'))
             sql((ROOT/'schema/015_rest_capture_scheduling.sql').read_text(encoding='utf-8'))
+            sql((ROOT/'schema/016_lti_tool_keys.sql').read_text(encoding='utf-8'))
+            sql((ROOT/'schema/017_lti_service_attempts.sql').read_text(encoding='utf-8'))
+            sql((ROOT/'schema/018_lti_service_recovery.sql').read_text(encoding='utf-8'))
+            sql((ROOT/'schema/019_lti_capture.sql').read_text(encoding='utf-8'))
+            sql((ROOT/'schema/020_lti_capture_administration.sql').read_text(encoding='utf-8'))
+            sql((ROOT/'schema/021_lti_capture_scheduling.sql').read_text(encoding='utf-8'))
             sql("""CREATE ROLE canvas_runtime LOGIN PASSWORD 'synthetic-driver-runtime';
                 GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_runtime;
                 GRANT USAGE ON SCHEMA canvas_connector TO canvas_runtime;
@@ -99,7 +105,10 @@ def main():
             fixture.write_text(json.dumps({'port':int(pgport.rsplit(':',1)[1]),'ca':(path/'server.crt').read_text(),
                 'untrustedCa':(path/'untrusted.crt').read_text(),'baoOrigin':'https://'+baoport,
                 'baoCa':docker('exec',bao,'cat','/tmp/canvas-tls/vault-ca.pem'),'baoToken':token,'baoFileToken':file_token}))
-            def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage,pg],check=True,cwd=ROOT,env=env,timeout=30)
+            # Initial qualification composes the LTI custody, capture and worker
+            # contracts as well as OAuth administration. Keep individual runtime
+            # deadlines intact while allowing this cumulative suite to finish.
+            def node(stage):subprocess.run(['node',str(ROOT/'test/postgres-pool-contract.mjs'),str(fixture),stage,pg],check=True,cwd=ROOT,env=env,timeout=180 if stage=='initial' else 30)
             node('initial')
             subprocess.run(['node',str(ROOT/'test/connector-oauth-runtime-contract.mjs'),str(fixture),pg,bao],check=True,cwd=ROOT,env=env,timeout=60)
             if arguments:

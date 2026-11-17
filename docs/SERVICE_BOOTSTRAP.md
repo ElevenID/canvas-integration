@@ -28,6 +28,24 @@ The database CA remains explicit. TLS key/certificate are loaded once; reload or
 TLS rotation requires an orderly restart. Password/token acquisition continues
 through the separate renewing file providers.
 
+The optional `lti.services` boolean enables connector-owned tool-key/JWK,
+service-credential and recovery routes and their operator controls. It requires
+owner-installed migrations016–018 and the restricted service capabilities in
+addition to launch permissions. Startup runs both read-only capability checks
+before listening. Omission or `false` preserves the existing route set; strings
+are rejected. This option is separate from the verifier's LTI trust policy and
+does not introduce a credential, transport or canonical-authority override.
+
+The separate `lti.captures` boolean enables LTI capture-route administration.
+It requires `lti.services: true`, owner-installed migrations019–020 and explicit
+capture administration capabilities. Its additional read-only startup check
+rejects missing or excessive capture writes, mutable audit/history fields,
+disabled guards, definer functions and reachable sequence-reset privileges,
+including privileges hidden behind INHERIT FALSE membership. Startup supplies no
+roles, grants or migrations. Omission or `false` leaves these routes disabled.
+This enables the HTTP administration API; worker cadence and browser controls
+for these routes remain separate composition work.
+
 Only `CANVAS_CONNECTOR_CONFIG_FILE` is consumed for configuration. Argv overrides,
 legacy core/database/Gateway credentials, libpq defaults and TLS-bypass environment
 settings are rejected. Process output contains only lifecycle state, the actual

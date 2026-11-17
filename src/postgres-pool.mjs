@@ -5,6 +5,34 @@ import PgPool from 'pg-pool';
 const unavailable=()=>new Error('connector_database_unavailable');
 const identifier=value=>typeof value==='string' && /^[A-Za-z_][A-Za-z0-9_-]{0,62}$/.test(value);
 const duration=value=>Number.isSafeInteger(value) && value>=100 && value<=30000;
+// A provider can be shared by multiple pools. Keep fresh password acquisitions
+// within the private-file reader's four-I/O budget without caching/coalescing
+// credentials. Waiting is bounded and consumes the original connect deadline.
+const credentialGates=new WeakMap();
+function credentialSlot(provider,signal) {
+  let gate=credentialGates.get(provider);
+  if(!gate){gate={active:0,waiting:[]};credentialGates.set(provider,gate);}
+  return new Promise((resolve,reject)=>{
+    if(signal.aborted||gate.waiting.length>=16)return reject(unavailable());
+    const waiter={grant:null,abort:null};
+    waiter.abort=()=>{
+      const index=gate.waiting.indexOf(waiter);
+      if(index>=0)gate.waiting.splice(index,1);
+      signal.removeEventListener('abort',waiter.abort);reject(unavailable());
+    };
+    waiter.grant=()=>{
+      signal.removeEventListener('abort',waiter.abort);
+      if(signal.aborted){reject(unavailable());return;}
+      gate.active++;let released=false;
+      resolve(()=>{
+        if(released)return;released=true;gate.active--;
+        while(gate.active<4&&gate.waiting.length)gate.waiting.shift().grant();
+      });
+    };
+    if(gate.active<4)waiter.grant();
+    else {gate.waiting.push(waiter);signal.addEventListener('abort',waiter.abort,{once:true});}
+  });
+}
 /** Connector-owned autocommit transport only. No URI/environment defaults,
  * transaction handles, migrations, retry, credentials in errors or core calls.
  * Only trusted repository/vault SQL belongs here; this is not a public SQL API.
@@ -45,7 +73,12 @@ export function createConnectorPostgresPool(configuration={}) {
       timer=setTimeout(()=>finish(unavailable()),connectTimeoutMs);
       // Fetch even when the server requests no password (e.g. HBA trust).
       // The same deadline covers credential acquisition and the TLS handshake.
-      Promise.resolve().then(()=>credentialProvider.getPassword({signal:controller.signal})).then(secret=>{
+      credentialSlot(credentialProvider,controller.signal).then(async release=>{
+        try {
+          if(completed||controller.signal.aborted)throw unavailable();
+          return await credentialProvider.getPassword({signal:controller.signal});
+        }finally{release();}
+      }).then(secret=>{
         if(completed || controller.signal.aborted || stream.destroyed) return finish(unavailable());
         if(typeof secret!=='string' || !secret.length || secret.length>4096 || /[\x00-\x1f\x7f]/.test(secret)) return finish(unavailable());
         this.connectionParameters.password=this.password=secret;

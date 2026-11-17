@@ -9,7 +9,7 @@ const actions = (name, entries) => choice(name, 'Action', entries.map(value => [
 const form = (id, title, contents, button = 'Submit change') => `<details><summary>${title}</summary><form id="${id}" method="post" action="/admin">${contents}<button>${button}</button></form></details>`;
 
 export function operatorPage(features) {
-  if (!Array.isArray(features) || features.some(value => !['platforms', 'clients', 'connections', 'captures', 'lti', 'recovery'].includes(value))) throw Error('invalid_operator_features');
+  if (!Array.isArray(features) || features.some(value => !['platforms', 'clients', 'connections', 'captures', 'lti', 'lti-services', 'lti-captures', 'recovery'].includes(value))) throw Error('invalid_operator_features');
   const numeric = 'inputmode="numeric" pattern="[1-9][0-9]{0,19}" maxlength="20"';
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Canvas connections · ElevenID</title><link rel="stylesheet" href="/admin/styles.css"><script src="/admin/app.js" defer></script>
@@ -38,11 +38,21 @@ ${form('route-action', 'Inspect, activate or capture', resource() + actions('act
 ${form('lti-edit', 'Create or replace a registration', actions('action',['create','replace']) + resource() + revision('expected_registration_version','Registration version for replacement') + input('client_id','Canvas LTI client ID','maxlength="255"') + input('deployment_id','Canvas deployment ID','maxlength="255"') + choice('trust_profile','Platform trust',[['hosted_global','Canvas hosted'],['self_managed_same_origin','Explicitly allowed self-managed Canvas']]) + choice('environment','Hosted environment',[['production','Production'],['beta','Beta'],['test','Test']]))}
 ${form('lti-action', 'Inspect or change registration state', resource() + actions('action',['inspect','activate','deactivate']) + revision('expected_registration_version','Registration version'), 'Apply selected action')}
 <p>Copy the returned target link URI into the approved Canvas tool configuration. Provider launch assertions remain separate from ElevenID account ownership.</p></section>
+<section data-requires="lti-services"><h2>LTI service access</h2><p>Generate a tool key, copy the inspected public JWK URL into Canvas, and activate the registration before requesting approved read scopes. Key material and service tokens remain in connector custody.</p>
+${form('lti-key','Inspect, provision or rotate a tool key',resource()+actions('action',['inspect','provision','rotate','deactivate'])+revision('expected_registration_version','Registration version')+revision('expected_key_version','Tool-key version'),'Apply key action')}
+${form('lti-credential','Request or inspect service credentials',resource()+actions('action',['exchange','inspect','recover','catalog'])+revision('expected_registration_version','Registration version')+revision('expected_key_version','Tool-key version')+input('attempt_id','Original credential attempt ID','maxlength="36"')+`<label>After attempt ID (optional)<input name="after_id" maxlength="36"></label><fieldset><legend>Approved read scopes</legend>${[['results','Assignment results'],['lineitems','Line-item metadata'],['memberships','Resource membership']].map(([value,title])=>`<label class="check"><input type="checkbox" name="service_scopes" value="${value}"${value==='results'?' checked':''}>${title}</label>`).join('')}</fieldset>`,'Apply credential action')}
+<p>An uncertain exchange is never repeated automatically. Inspect its original ID. Recovery of staged credentials only reconciles the stored result.</p>
+${form('lti-service-recovery','Resolve a service attempt',resource()+input('attempt_id','Original credential attempt ID','maxlength="36"')+actions('action',['abandon_prepared','retire_known','resolve_unknown'])+choice('expected_phase','Current attempt phase',[['prepared','Prepared'],['exchanging','Exchanging'],['uncertain','Uncertain'],['staged','Staged'],['published','Published']])+revision('expected_registration_version','Current disabled registration version')+revision('expected_key_version','Current deactivated tool-key version')+input('confirmation_reference','External disposition record ID (operator attestation)','maxlength="36"'),'Record resolution')}
+<p>Unknown-outcome resolution requires a disabled platform and registration, a deactivated tool key, and an external disposition record. It records your attestation; it does not verify remote revocation. Known tokens can retire only after their conservative expiry window.</p></section>
+<section data-requires="lti-captures"><h2>LTI capture routes</h2><p>Use an approved ElevenID evidence binding and a published service credential attempt. The server checks their current scope and revisions. Scores and membership are provider observations; they do not establish ElevenID identity or completion.</p>
+${form('lti-capture-edit','Create or replace an LTI capture route',input('registration_id','LTI registration ID','maxlength="36"')+input('resource_id','LTI capture route ID','maxlength="128"')+actions('action',['create','replace'])+revision('expected_route_version','Route version for replacement')+revision('expected_registration_version','Registration version')+revision('expected_key_version','Tool-key version')+input('service_operation_id','Published credential attempt ID','maxlength="36"')+input('producer_ref','Approved producer reference','maxlength="128"')+input('binding_id','ElevenID binding ID','maxlength="128"')+revision('binding_revision','Binding revision')+choice('fact_type','Observation',[['canvas.ags_result','AGS result'],['canvas.nrps_membership','NRPS membership']])+input('course_id','Canvas course ID',numeric)+input('provider_user_id','Opaque provider user ID','maxlength="255"')+input('resource_link_id','LTI resource link ID','maxlength="255"')+input('line_item_id','AGS line-item ID',numeric)+input('context_id','NRPS context ID','maxlength="255"')+`<fieldset><legend>Claims allowed by the binding</legend>${['score','score_maximum','score_percent','provider_state'].map(value=>`<label class="check"><input type="checkbox" name="lti_claims" value="${value}"${value==='score'?' checked':''}>${value.replaceAll('_',' ')}</label>`).join('')}</fieldset>`,'Save disabled LTI route')}
+${form('lti-capture-action','Inspect, activate or schedule an LTI capture',input('registration_id','LTI registration ID','maxlength="36"')+input('resource_id','LTI capture route ID','maxlength="128"')+actions('action',['catalog','inspect','activate','deactivate','schedule','capture'])+revision('expected_route_version','Route version')+revision('expected_registration_version','Registration version')+revision('expected_key_version','Tool-key version')+input('service_operation_id','Published credential attempt ID','maxlength="36"')+input('capture_id','Original capture ID','maxlength="36"')+`<label>After route ID (optional)<input name="after_id" maxlength="128"></label>`,'Apply capture action')}
+<p>These reads use their time of observation. Automatic cadence is configured in the private LTI worker. An unconfirmed response or permission loss can follow a committed change; keep the original operation ID until its receipt is reconciled.</p></section>
 <section data-requires="recovery"><h2>Authorization recovery</h2><p>Inspect the original authorization before choosing an action. These actions do not repeat a token exchange.</p>
 ${form('recovery', 'Inspect or resolve an authorization attempt', input('authorization_id','Original authorization ID','pattern="[a-f0-9]{64}" maxlength="64"') + actions('mode',['inspect','recover']) + revision('expected_revision','Attempt revision') + actions('action',['abandon_unstarted','queue_staged_revocation','finish_staged_revocation']), 'Apply selected action')}
 </section>
 <section><h2>Original operation receipts</h2><p>Changes are never retried automatically. Pending IDs survive reload in this tab’s session storage; copy IDs before closing the tab. An absent receipt is a snapshot and does not prove rollback.</p><ul id="operations"></ul>
-${form('receipt', 'Inspect a saved operation ID', choice('kind','Operation',[['platform','Platform'],['client','Developer key'],['connection','Disconnect'],['route','Capture route'],['lti','LTI registration'],['recovery','Authorization recovery']]) + resource() + input('operation_id','Original operation ID','maxlength="36"') + `<label>Authorization ID, for recovery receipts<input name="authorization_id" maxlength="64"></label>`, 'Inspect original receipt')}
+${form('receipt', 'Inspect a saved operation ID', choice('kind','Operation',[['platform','Platform'],['client','Developer key'],['connection','Disconnect'],['route','Capture route'],['lti','LTI registration'],['lti-key','LTI tool key'],['lti-credential','LTI credentials'],['lti-resolution','LTI service resolution'],['lti-capture','LTI capture route'],['recovery','Authorization recovery']]) + resource() + input('operation_id','Original operation ID','maxlength="36"') + `<label>LTI registration ID, for capture receipts<input name="registration_id" maxlength="36"></label><label>Authorization ID, for recovery receipts<input name="authorization_id" maxlength="64"></label><label>Credential attempt ID, for LTI resolution receipts<input name="attempt_id" maxlength="36"></label>`, 'Inspect original receipt')}
 </section></fieldset><section><h2>Result</h2><pre id="result" tabindex="0">No inspection yet.</pre></section></main>
 <footer>External observations remain unsigned producer attestations. Verification and issuance are governed by ElevenID.</footer></html>`;
 }
@@ -61,21 +71,34 @@ function operatorBrowser() {
   const label = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
   const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
   const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-  const pathAllowed = path => ['/admin/session','/platforms/catalog'].includes(path) || /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:configuration\/(?:inspect|receipt|create|change)|connection\/(?:inspect|receipt|disconnect)|oauth\/client\/(?:inspect|receipt|provision)|oauth\/start|oauth\/attempts\/(?:inspect|receipt|recover)|capture-routes\/(?:catalog|[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:inspect|receipt|capture|create|replace|activate|deactivate|schedule))|lti\/registrations\/(?:catalog|[a-f0-9-]{36}\/(?:inspect|receipt|create|replace|activate|deactivate)))$/.test(path);
+  const legacyPathAllowed = path => ['/admin/session','/platforms/catalog'].includes(path) || /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:configuration\/(?:inspect|receipt|create|change)|connection\/(?:inspect|receipt|disconnect)|oauth\/client\/(?:inspect|receipt|provision)|oauth\/start|oauth\/attempts\/(?:inspect|receipt|recover)|capture-routes\/(?:catalog|[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:inspect|receipt|capture|create|replace|activate|deactivate|schedule))|lti\/registrations\/(?:catalog|[a-f0-9-]{36}\/(?:inspect|receipt|create|replace|activate|deactivate)))$/.test(path);
+  const capturePath = path => /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/lti\/registrations\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/capture-routes\/(?:catalog|[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/(?:inspect|receipt|capture|create|replace|activate|deactivate|schedule))$/.test(path);
+  const pathAllowed = path => legacyPathAllowed(path) || capturePath(path) || /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/lti\/registrations\/[a-f0-9-]{36}\/(?:tool-key\/(?:inspect|receipt|provision|rotate|deactivate)|service-credentials\/(?:catalog|inspect|receipt|exchange|recover|resolve|resolution-receipt))$/.test(path);
   const features = new Set(document.querySelector('main').dataset.features.split(','));
   for (const section of document.querySelectorAll('[data-requires]')) section.hidden = !features.has(section.dataset.requires);
   let busy = false, platformCursor = null, routeCursor = null, ltiCursor = null, cursorPlatform = null;
   let organizationId = null;
   let journal = [], storageReady = true;
   const storageKey = 'elevenid_canvas_operator_pending_v1';
-  const formIds = ['platform-create','platform-change','client-provision','connection-disconnect','route-edit','route-action','lti-edit','lti-action','recovery'];
+  const formIds = ['platform-create','platform-change','client-provision','connection-disconnect','route-edit','route-action','lti-edit','lti-action','lti-key','lti-credential','lti-service-recovery','lti-capture-edit','lti-capture-action','recovery'];
   function validEntry(entry) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry) || Object.keys(entry).sort().join(',') !== 'extras,formId,operationId,organizationId,path,platformId,receiptPath') return false;
+    if(entry.formId==='lti-key'&&!/\/tool-key\/(provision|rotate|deactivate)$/.test(entry.path))return false;
+    if(entry.formId==='lti-credential'&&!/\/service-credentials\/(exchange|recover)$/.test(entry.path))return false;
+    if(entry.formId==='lti-service-recovery'&&!/\/service-credentials\/resolve$/.test(entry.path))return false;
+    if(capturePath(entry.path)&&!['lti-capture-edit','lti-capture-action'].includes(entry.formId))return false;
+    if(entry.formId==='lti-capture-edit'&&(!capturePath(entry.path)||!/\/capture-routes\/[^/]+\/(create|replace)$/.test(entry.path)))return false;
+    if(entry.formId==='lti-capture-action'&&(!capturePath(entry.path)||!/\/capture-routes\/[^/]+\/(activate|deactivate|schedule)$/.test(entry.path)))return false;
     return formIds.includes(entry.formId) && uuid(entry.organizationId) && label(entry.platformId) && uuid(entry.operationId) && pathAllowed(entry.path)
-      && entry.path.startsWith('/platforms/' + entry.platformId + '/') && /\/(?:create|change|provision|disconnect|replace|activate|deactivate|schedule|recover)$/.test(entry.path)
-      && entry.receiptPath === entry.path.replace(/[^/]+$/, 'receipt') && pathAllowed(entry.receiptPath)
+      && entry.path.startsWith('/platforms/' + entry.platformId + '/') && /\/(?:create|change|provision|rotate|disconnect|replace|activate|deactivate|schedule|recover|exchange|resolve)$/.test(entry.path)
+      && entry.receiptPath === entry.path.replace(/[^/]+$/, entry.formId==='lti-service-recovery'?'resolution-receipt':'receipt') && pathAllowed(entry.receiptPath)
       && entry.extras && typeof entry.extras === 'object' && !Array.isArray(entry.extras)
-      && (Object.keys(entry.extras).length === 0 || (Object.keys(entry.extras).join(',') === 'authorization_id' && hash(entry.extras.authorization_id)));
+      && (['lti-capture-edit','lti-capture-action'].includes(entry.formId)?Object.keys(entry.extras).sort().join(',')==='expectedVersion,serviceOperationId'
+          &&Number.isSafeInteger(entry.extras.expectedVersion)&&entry.extras.expectedVersion>0
+          &&(entry.path.endsWith('/deactivate')?entry.extras.serviceOperationId===null:uuid(entry.extras.serviceOperationId))
+        : entry.formId==='lti-service-recovery' ? Object.keys(entry.extras).join(',')==='attempt_id'&&uuid(entry.extras.attempt_id)
+        : ['lti-key','lti-credential'].includes(entry.formId)?Object.keys(entry.extras).length===0
+        : Object.keys(entry.extras).length === 0 || (Object.keys(entry.extras).join(',') === 'authorization_id' && hash(entry.extras.authorization_id)));
   }
   try {
     const saved = window.sessionStorage.getItem(storageKey);
@@ -97,6 +120,14 @@ function operatorBrowser() {
     if (receipt?.operationId !== entry.operationId) return false;
     if (entry.formId === 'connection-disconnect') return uuid(receipt.connectionId) && receipt.status === 'disconnected';
     if (entry.formId === 'recovery') return receipt.authorizationId === entry.extras.authorization_id;
+    if(entry.formId==='lti-service-recovery')return receipt.platformId===entry.platformId&&receipt.attemptId===entry.extras.attempt_id&&receipt.phase==='resolved';
+    if(['lti-capture-edit','lti-capture-action'].includes(entry.formId)) {
+      const parts=entry.path.split('/'),action=parts[8];
+      return receipt.platformId===entry.platformId&&receipt.registrationId===parts[5]&&receipt.routeId===parts[7]&&receipt.action===action
+        &&receipt.version===entry.extras.expectedVersion&&uuid(receipt.serviceOperationId)
+        &&(entry.extras.serviceOperationId===null||receipt.serviceOperationId===entry.extras.serviceOperationId)&&receipt.enabled===['activate','schedule'].includes(action)
+        &&receipt.captureId===(action==='schedule'?entry.operationId:null);
+    }
     return receipt.platformId === entry.platformId;
   }
   function platform() {
@@ -112,6 +143,7 @@ function operatorBrowser() {
   const version = () => number(get('platform-version').value);
   function route(value) { if (!label(value)) throw Error('invalid_input'); return '/capture-routes/' + value; }
   function registration(value) { if (!uuid(value)) throw Error('invalid_input'); return '/lti/registrations/' + value; }
+  function ltiCapture(registrationId,routeId) {if(!label(routeId))throw Error('invalid_input');return registration(registrationId)+'/capture-routes/'+routeId;}
   async function post(path, values = {}) {
     if (!pathAllowed(path)) throw Error('invalid_input');
     if(path!=='/admin/session' && organizationId===null) throw Error('context_required');
@@ -155,9 +187,14 @@ function operatorBrowser() {
       button.type = 'button'; button.textContent = 'Inspect original receipt';
       button.addEventListener('click', () => run(async () => {
         if(organizationId!==entry.organizationId) {notice('Switch to the original ElevenID organization '+entry.organizationId+' and reload context to inspect this receipt.');return;}
-        const result = await post(entry.receiptPath, { ...entry.extras, operation_id: entry.operationId }); show(result);
+        const data={operation_id:entry.operationId};
+        if(entry.formId==='recovery')data.authorization_id=entry.extras.authorization_id;
+        if(entry.formId==='lti-service-recovery')data.attempt_id=entry.extras.attempt_id;
+        const result = await post(entry.receiptPath,data); show(result);
         if (matchesReceipt(entry, result.receipt)) {
           save(journal.filter(current => current !== entry)); notice('Original receipt found. Inspect current state before another change.');
+        } else if(entry.formId==='lti-credential'&&result.attemptId===entry.operationId&&result.phase==='resolved'&&result.receipt===null) {
+          save(journal.filter(current=>current!==entry));notice('The original credential attempt is resolved. Inspect current state before another operation.');
         } else if (result.receipt === null) notice('No receipt in this snapshot. The original request may still be finishing; keep this ID and inspect again.');
         else notice('Receipt response did not match the original operation. Keep this ID for reconciliation.');
       }));
@@ -167,23 +204,36 @@ function operatorBrowser() {
   renderJournal();
   async function mutate(form, path, values) {
     if(organizationId===null) throw Error('context_required');
-    if (journal.some(entry => entry.formId === form.id)) { notice('This form has an unconfirmed operation. Inspect its original receipt first.'); return; }
-    const operationId = window.crypto.randomUUID(), platformId = path.split('/')[2];
-    const entry = { formId: form.id, organizationId, platformId, path, receiptPath: path.replace(/[^/]+$/, 'receipt'), operationId,
-      extras: values.authorization_id ? { authorization_id: values.authorization_id } : {} };
-    save([...journal, entry]);
+    const recovering=form.id==='lti-credential'&&path.endsWith('/recover');
+    const previous=journal.find(entry=>entry.formId===form.id),receiptPath=path.replace(/[^/]+$/,form.id==='lti-service-recovery'?'resolution-receipt':'receipt');
+    if(previous&&(!recovering||previous.organizationId!==organizationId||previous.operationId!==values.attempt_id||previous.receiptPath!==receiptPath)) {notice('This form has an unconfirmed operation. Inspect its original receipt first.');return;}
+    const operationId = recovering?values.attempt_id:window.crypto.randomUUID(), platformId = path.split('/')[2];
+    if(!uuid(operationId))throw Error('invalid_input');
+    let extras=form.id==='lti-service-recovery'?{attempt_id:values.attempt_id}:values.authorization_id?{authorization_id:values.authorization_id}:{};
+    if(['lti-capture-edit','lti-capture-action'].includes(form.id)) {
+      const action=path.split('/').at(-1),expectedVersion=action==='create'?1:Number(number(values.expected_route_version))+(action==='schedule'?0:1);
+      if(!Number.isSafeInteger(expectedVersion)||expectedVersion<1||action!=='deactivate'&&!uuid(values.service_operation_id))throw Error('invalid_input');
+      extras={expectedVersion,serviceOperationId:action==='deactivate'?null:values.service_operation_id};
+    }
+    const entry = previous??{ formId: form.id, organizationId, platformId, path, receiptPath, operationId,extras };
+    if(!previous)save([...journal, entry]);
     show({operationId,platformId,status:'pending'});
     notice('Submitting operation ' + operationId + '. Keep this ID until the result is confirmed.');
     // The journal contains only receipt pointers, never intent bodies or secrets.
     let result;
-    try { result = await post(path, { ...values, operation_id: operationId }); }
+    try { result = await post(path, recovering?values:{ ...values, operation_id: operationId }); }
     catch (error) {
       // These existing adapters reject these statuses before a write. Transport
       // failures, malformed successes and server errors retain the original ID.
-      if ([400,401,403,404,405,409,413,415,429].includes(error.status)) save(journal.filter(current => current !== entry));
+      if (!recovering&&[400,401,403,404,405,409,413,415,429].includes(error.status)&&!(error.status===403&&['lti-key','lti-credential','lti-service-recovery','lti-capture-edit','lti-capture-action'].includes(form.id))) save(journal.filter(current => current !== entry));
       throw error;
     }
     show(result);
+    if(form.id==='lti-credential'&&result.attempt?.attemptId===operationId) {
+      if(result.attempt.phase==='resolved'&&result.attempt.receipt===null) {save(journal.filter(current=>current!==entry));notice('Original credential attempt is resolved. Inspect current state before another operation.');return;}
+      if(!matchesReceipt(entry,result.attempt.receipt)) {notice('Credential attempt '+operationId+' is '+result.attempt.phase+'. Inspect this original ID; it will not be exchanged again automatically.');return;}
+      result={...result,receipt:result.attempt.receipt};
+    }
     if (!matchesReceipt(entry, result.receipt)) throw Error('request_unconfirmed');
     save(journal.filter(current => current !== entry));
     notice('Change recorded as ' + operationId + '. Inspect current state before continuing.');
@@ -252,10 +302,42 @@ function operatorBrowser() {
     }
     if (form.id === 'lti-edit') { use('expected_registration_version', value('action') === 'replace'); use('environment', value('trust_profile') === 'hosted_global'); }
     if (form.id === 'lti-action') use('expected_registration_version', value('action') !== 'inspect');
+    if(form.id==='lti-capture-edit') {
+      const ags=value('fact_type')==='canvas.ags_result';use('expected_route_version',value('action')==='replace');use('line_item_id',ags);use('context_id',!ags);
+      const fields=[...form.querySelectorAll('[name="lti_claims"]')];
+      for(const field of fields){const active=ags?field.value!=='provider_state':field.value==='provider_state';field.disabled=!active;field.closest('label').hidden=!active;}
+      if(!fields.some(field=>!field.disabled&&field.checked))fields.find(field=>!field.disabled).checked=true;
+    }
+    if(form.id==='lti-capture-action') {
+      const active=['activate','schedule'].includes(value('action'));
+      use('resource_id',value('action')!=='catalog');use('expected_route_version',active||value('action')==='deactivate');
+      for(const name of ['expected_registration_version','expected_key_version','service_operation_id'])use(name,active);
+      use('capture_id',value('action')==='capture');use('after_id',value('action')==='catalog');form.elements.namedItem('after_id').required=false;
+    }
+    if(form.id==='lti-key') {
+      use('expected_registration_version',['provision','rotate'].includes(value('action')));
+      use('expected_key_version',['rotate','deactivate'].includes(value('action')));
+    }
+    if(form.id==='lti-credential') {
+      use('expected_registration_version',value('action')==='exchange');use('expected_key_version',value('action')==='exchange');
+      use('attempt_id',!['exchange','catalog'].includes(value('action')));
+      use('after_id',value('action')==='catalog');form.elements.namedItem('after_id').required=false;
+      for(const field of form.querySelectorAll('input[name="service_scopes"]'))field.disabled=value('action')!=='exchange';
+    }
+    if(form.id==='lti-service-recovery') {
+      const external=value('action')==='resolve_unknown';
+      use('expected_registration_version',external);use('expected_key_version',external);use('confirmation_reference',external);
+      const phases=value('action')==='abandon_prepared'?['prepared']:external?['exchanging','uncertain']:['staged','published'];
+      const field=form.elements.namedItem('expected_phase');for(const option of field.options)option.disabled=!phases.includes(option.value);
+      if(!phases.includes(field.value))field.value=phases[0];
+    }
     if (form.id === 'recovery') { use('expected_revision', value('mode') === 'recover'); use('action', value('mode') === 'recover'); }
-    if (form.id === 'receipt') { use('resource_id', ['route','lti'].includes(value('kind'))); use('authorization_id', value('kind') === 'recovery'); }
+    if (form.id === 'receipt') { use('resource_id', ['route','lti','lti-key','lti-credential','lti-resolution','lti-capture'].includes(value('kind'))); use('authorization_id', value('kind') === 'recovery');use('attempt_id',value('kind')==='lti-resolution');use('registration_id',value('kind')==='lti-capture'); }
   }
-  for (const form of document.forms) { updateForm(form); form.addEventListener('change', () => updateForm(form)); }
+  for (const form of document.forms) { updateForm(form); form.addEventListener('change', event => {
+    if(form.id==='lti-credential'&&event.target.name==='resource_id')form.elements.namedItem('after_id').value='';updateForm(form);
+    if(form.id==='lti-capture-action'&&event.target.name==='registration_id')form.elements.namedItem('after_id').value='';
+  }); }
   async function loadContext() {
     organizationId=null;get('organization').textContent='Organization context not loaded.';
     for(const form of document.forms) {form.reset();updateForm(form);}
@@ -324,12 +406,82 @@ function operatorBrowser() {
         if (values.action === 'replace') data.expected_registration_version = number(values.expected_registration_version);
         return mutate(form, selectedBase + registration(values.resource_id) + '/' + values.action, data);
       }
+      if(form.id==='lti-capture-edit') {
+        if(!uuid(values.service_operation_id))throw Error('invalid_input');
+        const requirement={factType:values.fact_type,courseId:values.course_id,userId:values.provider_user_id,resourceLinkId:values.resource_link_id};
+        if(values.fact_type==='canvas.ags_result')requirement.lineItemId=values.line_item_id;else requirement.contextId=values.context_id;
+        const claims=submitted.getAll('lti_claims');if(!claims.length)throw Error('invalid_input');
+        const data={expected_platform_version:version(),expected_registration_version:number(values.expected_registration_version),expected_key_version:number(values.expected_key_version),
+          service_operation_id:values.service_operation_id,producer_ref:values.producer_ref,binding_id:values.binding_id,binding_revision:number(values.binding_revision),
+          requirement:JSON.stringify(requirement),claim_names:JSON.stringify(claims),effective_time_policy:'as_of_read'};
+        if(values.action==='replace')data.expected_route_version=number(values.expected_route_version);
+        return mutate(form,selectedBase+ltiCapture(values.registration_id,values.resource_id)+'/'+values.action,data);
+      }
+      if(form.id==='lti-capture-action') {
+        if(values.action==='catalog') {
+          if(values.after_id&&!label(values.after_id))throw Error('invalid_input');
+          const result=await post(selectedBase+registration(values.registration_id)+'/capture-routes/catalog',values.after_id?{after_id:values.after_id}:{});show(result);
+          if(!Array.isArray(result.routes)||result.routes.length>20||!(result.nextCursor===null||label(result.nextCursor)))throw Error('request_unconfirmed');
+          form.elements.namedItem('after_id').value=result.nextCursor??'';notice(result.nextCursor?'LTI route page loaded. Submit catalog for the next page.':'LTI route page loaded; no further page in this snapshot.');return;
+        }
+        const path=selectedBase+ltiCapture(values.registration_id,values.resource_id)+'/'+values.action;
+        if(['inspect','capture'].includes(values.action)) {
+          if(values.action==='capture'&&!uuid(values.capture_id))throw Error('invalid_input');
+          show(await post(path,values.action==='capture'?{capture_id:values.capture_id}:{}));notice('LTI capture state inspected.');return;
+        }
+        const data={expected_route_version:number(values.expected_route_version)};
+        if(values.action!=='deactivate') {
+          if(!uuid(values.service_operation_id))throw Error('invalid_input');
+          Object.assign(data,{expected_platform_version:version(),expected_registration_version:number(values.expected_registration_version),expected_key_version:number(values.expected_key_version),service_operation_id:values.service_operation_id});
+        }
+        return mutate(form,path,data);
+      }
       if (form.id === 'lti-action') {
         const path = selectedBase + registration(values.resource_id) + '/' + values.action;
         if (values.action === 'inspect') { show(await post(path)); notice('Inspection complete.'); return; }
         const data = { expected_registration_version: number(values.expected_registration_version) };
         if (values.action !== 'deactivate') data.expected_platform_version = version();
         return mutate(form, path, data);
+      }
+      if(form.id==='lti-key') {
+        const path=selectedBase+registration(values.resource_id)+'/tool-key/'+values.action;
+        if(values.action==='inspect'){show(await post(path));notice('Tool-key state and public JWK URL inspected.');return;}
+        const data={};
+        if(values.action!=='deactivate'){data.expected_platform_version=version();data.expected_registration_version=number(values.expected_registration_version);}
+        if(values.action!=='provision')data.expected_key_version=number(values.expected_key_version);
+        return mutate(form,path,data);
+      }
+      if(form.id==='lti-credential') {
+        const path=selectedBase+registration(values.resource_id)+'/service-credentials/'+values.action;
+        if(values.action==='catalog') {
+          if(values.after_id&&!uuid(values.after_id))throw Error('invalid_input');
+          const result=await post(path,values.after_id?{after_id:values.after_id}:{});show(result);
+          if(!(result.nextCursor===null||uuid(result.nextCursor)))throw Error('request_unconfirmed');
+          form.elements.namedItem('after_id').value=result.nextCursor??'';
+          notice(result.nextCursor?'Attempt page loaded. Submit catalog again for the next page.':'Attempt page loaded; no further page in this snapshot.');return;
+        }
+        if(values.action!=='exchange') {
+          if(!uuid(values.attempt_id))throw Error('invalid_input');
+          if(values.action==='recover')return mutate(form,path,{attempt_id:values.attempt_id});
+          const result=await post(path,{attempt_id:values.attempt_id});show(result);
+          const pending=journal.find(entry=>entry.formId===form.id&&entry.organizationId===organizationId&&entry.operationId===values.attempt_id);
+          if(pending&&matchesReceipt(pending,result.attempt?.receipt))save(journal.filter(entry=>entry!==pending));
+          notice('Original credential attempt inspected. Recovery performs no provider exchange.');return;
+        }
+        const scopeNames={results:'https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly',lineitems:'https://purl.imsglobal.org/spec/lti-ags/scope/lineitem.readonly',memberships:'https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly'};
+        const scopes=submitted.getAll('service_scopes').map(value=>scopeNames[value]);if(!scopes.length||scopes.some(value=>!value))throw Error('invalid_input');
+        return mutate(form,path,{expected_platform_version:version(),expected_registration_version:number(values.expected_registration_version),
+          expected_key_version:number(values.expected_key_version),scopes:JSON.stringify(scopes)});
+      }
+      if(form.id==='lti-service-recovery') {
+        if(!uuid(values.attempt_id))throw Error('invalid_input');
+        const data={attempt_id:values.attempt_id,action:values.action,expected_phase:values.expected_phase};
+        if(values.action==='resolve_unknown') {
+          if(!uuid(values.confirmation_reference))throw Error('invalid_input');
+          Object.assign(data,{expected_platform_version:version(),expected_registration_version:number(values.expected_registration_version),
+            expected_key_version:number(values.expected_key_version),confirmation_reference:values.confirmation_reference});
+        }
+        return mutate(form,selectedBase+registration(values.resource_id)+'/service-credentials/resolve',data);
       }
       if (form.id === 'recovery') {
         if (!hash(values.authorization_id)) throw Error('invalid_input');
@@ -340,9 +492,11 @@ function operatorBrowser() {
       if (form.id === 'receipt') {
         if (!uuid(values.operation_id)) throw Error('invalid_input');
         const suffix = { platform: '/configuration', client: '/oauth/client', connection: '/connection', route: null, lti: null, recovery: '/oauth/attempts' }[values.kind];
-        const path = selectedBase + (values.kind === 'route' ? route(values.resource_id) : values.kind === 'lti' ? registration(values.resource_id) : suffix) + '/receipt';
+        const ltiKind=['lti','lti-key','lti-credential','lti-resolution'].includes(values.kind);
+        const path = selectedBase + (values.kind==='lti-capture'?ltiCapture(values.registration_id,values.resource_id):values.kind === 'route' ? route(values.resource_id) : ltiKind ? registration(values.resource_id)+({lti:'','lti-key':'/tool-key','lti-credential':'/service-credentials','lti-resolution':'/service-credentials'}[values.kind]) : suffix) + (values.kind==='lti-resolution'?'/resolution-receipt':'/receipt');
         const data = { operation_id: values.operation_id };
         if (values.kind === 'recovery') { if (!hash(values.authorization_id)) throw Error('invalid_input'); data.authorization_id = values.authorization_id; }
+        if(values.kind==='lti-resolution'){if(!uuid(values.attempt_id))throw Error('invalid_input');data.attempt_id=values.attempt_id;}
         const result = await post(path, data); show(result);
         notice(result.receipt === null ? 'No receipt in this snapshot. Absence does not prove rollback.' : 'Historical receipt inspected. Inspect current state before another change.');
       }

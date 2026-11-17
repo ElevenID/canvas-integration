@@ -10,6 +10,8 @@ import { createCaptureRouteAdminHandler } from './capture-route-admin-http.mjs';
 import { createLtiLaunchHandler } from './lti-launch-http.mjs';
 import { createLtiRegistrationAdminHandler } from './lti-registration-admin-http.mjs';
 import { createLtiProviderIdentityHandler } from './lti-provider-identity-http.mjs';
+import { createLtiServiceAdminHandler } from './lti-service-admin-http.mjs';
+import { createLtiCaptureAdminHandler } from './lti-capture-admin-http.mjs';
 import { operatorPage, operatorScript, operatorStyles, operatorCompletionPage } from './operator-pages.mjs';
 
 const invalid = () => new Error('invalid_connector_service_configuration');
@@ -23,7 +25,7 @@ const pem = value => (typeof value === 'string' || Buffer.isBuffer(value))
 export function createConnectorHttpsService(configuration = {}) {
   if (typeof globalThis.window !== 'undefined' || !record(configuration)
       || Object.keys(configuration).some(key => !['publicOrigin', 'completionUrl', 'tls',
-        'host', 'port', 'maxConcurrentRequests', 'lifecycle', 'authenticateAndAuthorize', 'rateLimiter','recoveryStore','connectionStore','platformStore','clientStore','captureStore','readBinding','ltiLifecycle','ltiRegistrationStore','ltiSelfManagedOriginAllowlist','ltiIdentityStore'].includes(key))) throw invalid();
+        'host', 'port', 'maxConcurrentRequests', 'lifecycle', 'authenticateAndAuthorize', 'rateLimiter','recoveryStore','connectionStore','platformStore','clientStore','captureStore','readBinding','ltiLifecycle','ltiRegistrationStore','ltiSelfManagedOriginAllowlist','ltiIdentityStore','ltiServices','ltiCaptureStore'].includes(key))) throw invalid();
   const { publicOrigin, completionUrl, tls, lifecycle, authenticateAndAuthorize, rateLimiter,
     host = '127.0.0.1', port = 8443, maxConcurrentRequests = 8 } = configuration;
   let origin;
@@ -34,7 +36,7 @@ export function createConnectorHttpsService(configuration = {}) {
       || !Number.isInteger(maxConcurrentRequests) || maxConcurrentRequests < 1 || maxConcurrentRequests > 32
       || !record(tls) || Object.keys(tls).sort().join(',') !== 'cert,key'
       || !pem(tls.cert) || !pem(tls.key)) throw invalid();
-  let admin, callback, recovery, connections, platforms, clients, captures, lti, ltiAdmin, ltiIdentity, server;
+  let admin, callback, recovery, connections, platforms, clients, captures, lti, ltiAdmin, ltiIdentity, ltiServices, ltiCaptures, server;
   try {
     admin = createOAuthAdminHandler({ lifecycle, authenticateAndAuthorize, rateLimiter, adminOrigin: publicOrigin });
     callback = createOAuthCallbackHandler({ lifecycle, rateLimiter, completionUrl });
@@ -46,6 +48,10 @@ export function createConnectorHttpsService(configuration = {}) {
     if(configuration.ltiRegistrationStore!==undefined) ltiAdmin=createLtiRegistrationAdminHandler({store:configuration.ltiRegistrationStore,
       authenticateAndAuthorize,rateLimiter,publicOrigin,selfManagedOriginAllowlist:configuration.ltiSelfManagedOriginAllowlist??[]});
     else if(configuration.ltiSelfManagedOriginAllowlist!==undefined) throw invalid();
+    if(configuration.ltiServices!==undefined) {
+      if(!record(configuration.ltiServices)||Object.keys(configuration.ltiServices).sort().join(',')!=='keyStore,lifecycle,recoveryStore,store')throw invalid();
+      ltiServices=createLtiServiceAdminHandler({...configuration.ltiServices,authenticateAndAuthorize,rateLimiter,publicOrigin});
+    }
     if(configuration.recoveryStore!==undefined) recovery=createOAuthAttemptRecoveryHandler({store:configuration.recoveryStore,
       authenticateAndAuthorize,rateLimiter,adminOrigin:publicOrigin});
     if(configuration.connectionStore!==undefined) connections=createConnectionAdminHandler({store:configuration.connectionStore,
@@ -54,7 +60,9 @@ export function createConnectorHttpsService(configuration = {}) {
       authenticateAndAuthorize,rateLimiter,adminOrigin:publicOrigin});
     if(configuration.clientStore!==undefined) clients=createOAuthClientHandler({store:configuration.clientStore,
       authenticateAndAuthorize,rateLimiter,adminOrigin:publicOrigin});
-    if((configuration.captureStore===undefined)!==(configuration.readBinding===undefined)) throw invalid();
+    if((configuration.captureStore!==undefined||configuration.ltiCaptureStore!==undefined)!==(configuration.readBinding!==undefined)) throw invalid();
+    if(configuration.ltiCaptureStore!==undefined)ltiCaptures=createLtiCaptureAdminHandler({store:configuration.ltiCaptureStore,readBinding:configuration.readBinding,
+      authenticateAndAuthorize,rateLimiter,publicOrigin});
     if(configuration.captureStore!==undefined) captures=createCaptureRouteAdminHandler({store:configuration.captureStore,readBinding:configuration.readBinding,
       authenticateAndAuthorize,rateLimiter,adminOrigin:publicOrigin});
     server = createServer({ key: tls.key, cert: tls.cert, minVersion: 'TLSv1.2',
@@ -92,7 +100,7 @@ export function createConnectorHttpsService(configuration = {}) {
     const assets = {
       '/admin': ['text/html; charset=utf-8', () => operatorPage([
         ...(platforms ? ['platforms'] : []), ...(clients ? ['clients'] : []), ...(connections ? ['connections'] : []),
-        ...(captures ? ['captures'] : []), ...(ltiAdmin ? ['lti'] : []), ...(recovery ? ['recovery'] : [])])],
+        ...(captures ? ['captures'] : []), ...(ltiAdmin ? ['lti'] : []), ...(ltiServices?['lti-services']:[]), ...(ltiCaptures?['lti-captures']:[]), ...(recovery ? ['recovery'] : [])])],
       '/admin/app.js': ['text/javascript; charset=utf-8', () => operatorScript],
       '/admin/styles.css': ['text/css; charset=utf-8', () => operatorStyles],
       '/complete': ['text/html; charset=utf-8', () => operatorCompletionPage],
@@ -122,8 +130,10 @@ export function createConnectorHttpsService(configuration = {}) {
         Connection:'close'});
       response.end(body);return;
     }
+    if(ltiServices && (/^\/lti\/registrations\/[a-f0-9-]+\/jwks$/.test(request.url)||/^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/lti\/registrations\/[a-f0-9-]+\/(tool-key|service-credentials)\//.test(request.url)))return ltiServices(request,response);
     if(ltiIdentity && /^\/lti\/registrations\/[a-f0-9-]+\/provider-identity$/.test(request.url)) return ltiIdentity(request,response);
     if(lti && request.url.startsWith('/lti/registrations/')) return lti(request,response);
+    if(ltiCaptures&&/^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/lti\/registrations\/[a-f0-9-]+\/capture-routes\//.test(request.url))return ltiCaptures(request,response);
     if(ltiAdmin && /^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/lti\/registrations\//.test(request.url)) return ltiAdmin(request,response);
     if (request.url === '/oauth/callback' || request.url.startsWith('/oauth/callback?')) return callback(request, response);
     if (/^\/platforms\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}\/oauth\/start$/.test(request.url)) return admin(request, response);

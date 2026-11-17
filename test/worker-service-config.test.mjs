@@ -51,6 +51,14 @@ test('private capture schedule policies match an explicitly configured producer 
   }
 });
 
+test('LTI worker mode preserves private schedule policy and rejects OAuth refresh or empty producer slots',{skip:!posix},async t=>{
+ const f=await fixture(t);f.configuration.captureMode='lti';f.configuration.refreshTargets=[];
+ await f.save();const loaded=await loadConnectorWorkerConfiguration({path:f.path});assert.equal(loaded.captureMode,'lti');assert.deepEqual(loaded.refreshTargets,[]);
+ for(const change of [v=>v.captureMode='LTI',v=>v.captureMode=true,v=>v.refreshTargets=[{organizationId:'org',platformId:'platform'}],v=>v.producers=[]]) {
+  const value=structuredClone(f.configuration);change(value);await f.save(value);await assert.rejects(loadConnectorWorkerConfiguration({path:f.path}),denied);
+ }
+});
+
 test('worker config rejects raw credentials, unknown fields, malformed targets and unbounded slots',{skip:!posix},async t=>{
   const f=await fixture(t),copy=()=>JSON.parse(JSON.stringify(f.configuration));
   for(const mutate of [v=>{v.database.password='raw';},v=>{v.keyCustody.token='raw';},v=>{v.producers[0].apiKey='raw';},
