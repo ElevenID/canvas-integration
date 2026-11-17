@@ -44,6 +44,17 @@ must derive learner identity from the authenticated session and require a curren
 matching ownership assignment. A connector organization API key cannot stand in
 for the learner or approve the ownership assignment.
 
+Core also needs an explicit provider-proof trust contract for an approved
+connector source. A connector-local identity UUID alone proves nothing to Core.
+An authenticated producer attestation must bind the one-use challenge to the
+exact current provider observation and revision under independently approved
+source permissions. Core must reject unapproved sources, changed proof payloads,
+stale/revoked source authority and cross-challenge reuse. The existing
+`evidence:submit` permission is not an association permission. The proof only
+attests a provider observation; it never establishes the canonical learner,
+application ownership or consent. Core must not fetch caller-selected URLs to
+validate the proof.
+
 Application creation remains a Core operation with canonical templates,
 validation and lifecycle policy. The connector must not recreate the legacy
 Canvas bootstrap's application/subject generation. Creating a provider registry
