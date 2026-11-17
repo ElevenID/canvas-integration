@@ -205,10 +205,36 @@ Lease and token permits are checked before every request. A lost completion
 acknowledgement requires reconciliation of the original capture, with no retry
 inside the worker.
 
-This foundation is not mounted in the daemon. The durable LTI route/job repository,
-atomic completion-and-outbox transaction, restricted-role startup checks, operator
-configuration and scheduler integration remain to be implemented and physically
-qualified. The worker's repository fixture tests do not establish those guarantees.
+Owner migration019 and `lti-capture-repository.mjs` add durable routes and jobs.
+Scheduling binds an original capture UUID to the route version and published
+credential attempt. Replays reconcile that original identity. Claims are ordered
+within each route, use expiring leases and retain bounded exponential backoff.
+Before sending, the read permit checks the lease and current route, platform,
+registration, key, published token and required service scopes. Completion locks
+the current configuration and original job, then atomically allocates the existing
+outbox sequence, enqueues the unsigned observation and records the completed result.
+An expired or replaced lease cannot complete or defer the current attempt.
+
+Completed jobs retain the original lease/result as a receipt. Exact completion
+replays return success even after later configuration changes; changed payloads
+and other leases fail. A matching outbox row created by another pipeline is an
+identity collision, not a completed LTI receipt. Jobs and completed observations
+remain retained. Trigger postconditions detect changed schedule times, parking
+state, completion results and later counter/outbox mutations, rolling back the
+whole transaction.
+
+The actual PostgreSQL/OpenBao contract uses a distinct capture role and real
+keyless Canvas TLS reads. This role can read published-token ciphertext for
+connector-owned custody but has only the key metadata columns required for
+configuration checks; signing-key ciphertext, nonce, tag and wrapping-key ID
+reads are denied. It has no signing-key generation or credential-exchange grants.
+The service-role fixture separately provisions its synthetic key and credential.
+
+These adapters are not mounted in the daemon. Canonical Gateway-authorized route
+administration/audits, production restricted-role startup checks and scheduler
+integration remain to be implemented and qualified. Fixture owner route creation
+does not qualify a public operator workflow. Current Gateway authority remains
+mandatory at observation admission; local SQL configuration confers no Core grant.
 
 ## Durable work still required in this batch
 

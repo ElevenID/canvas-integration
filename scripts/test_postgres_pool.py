@@ -72,6 +72,7 @@ def main():
             sql((ROOT/'schema/016_lti_tool_keys.sql').read_text(encoding='utf-8'))
             sql((ROOT/'schema/017_lti_service_attempts.sql').read_text(encoding='utf-8'))
             sql((ROOT/'schema/018_lti_service_recovery.sql').read_text(encoding='utf-8'))
+            sql((ROOT/'schema/019_lti_capture.sql').read_text(encoding='utf-8'))
             sql("""CREATE ROLE canvas_runtime LOGIN PASSWORD 'synthetic-driver-runtime';
                 GRANT CONNECT ON DATABASE canvas_driver_test TO canvas_runtime;
                 GRANT USAGE ON SCHEMA canvas_connector TO canvas_runtime;
