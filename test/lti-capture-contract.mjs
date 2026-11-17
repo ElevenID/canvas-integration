@@ -9,6 +9,7 @@ import {createLtiCaptureWorker} from '../src/lti-capture-worker.mjs';
 import {prepareLtiCaptureRouteIntent} from '../src/lti-capture-contract.mjs';
 import {ltiServiceReadScopes} from '../src/lti-service-contract.mjs';
 import {httpsFixture,json} from './support/canvas-https-fixture.mjs';
+import {ltiCaptureAdminContract} from './lti-capture-admin-contract.mjs';
 
 export async function ltiCaptureContract(configuration,{servicePool,keyProvider,ownerQuery}) {
  const role='canvas_lti_capture_runtime',password='synthetic-lti-capture-password';
@@ -38,7 +39,7 @@ export async function ltiCaptureContract(configuration,{servicePool,keyProvider,
  const pool=createConnectorPostgresPool({...configuration,user:role,credentialProvider:{getPassword:async()=>password}});
  const peer=await httpsFixture();
  try {
-  const org='lti-capture-org',platform='lti-capture-platform',registration=randomUUID(),operation=randomUUID();
+  const org=randomUUID(),platform='lti-capture-platform',registration=randomUUID(),operation=randomUUID();
   const keys=createLtiToolKeyStore({pool:servicePool,keyProvider}),tokens=createLtiServiceStore({pool:servicePool,keyProvider});
   const captureTokens=createLtiServiceStore({pool,keyProvider}),repo=createLtiCaptureRepository(pool);
   await ownerQuery(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled) VALUES('${org}','${platform}','${peer.origin}',true);
@@ -148,6 +149,7 @@ export async function ltiCaptureContract(configuration,{servicePool,keyProvider,
   for(const sql of ['DELETE FROM canvas_connector.lti_capture_jobs',"UPDATE canvas_connector.lti_capture_jobs SET definition='{}'::jsonb",'UPDATE canvas_connector.lti_capture_routes SET version=version',
    'UPDATE canvas_connector.lti_service_tokens SET expires_at=clock_timestamp()',
    ...['ciphertext','nonce','tag','wrapping_key_id'].map(column=>`SELECT ${column} FROM canvas_connector.lti_tool_keys`)])await assert.rejects(pool.query(sql));
+  await ltiCaptureAdminContract(configuration,{organizationId:org,platformId:platform,registrationId:registration,serviceOperationId:operation,definition:route,ownerQuery});
   console.log('Actual restricted TLS PG/OpenBao LTI capture original-ID/concurrency/lease/config/rollback and keyless Canvas read -> atomic existing outbox PASS');
  }finally{await peer.close();await pool.close();}
 }

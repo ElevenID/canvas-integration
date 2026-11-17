@@ -24,6 +24,8 @@ import { createLtiServiceStore } from './lti-service-store.mjs';
 import { createLtiServiceLifecycle } from './lti-service-lifecycle.mjs';
 import { createLtiServiceRecoveryStore } from './lti-service-recovery-store.mjs';
 import { preflightLtiServices } from './lti-service-preflight.mjs';
+import { createLtiCaptureAdminStore } from './lti-capture-admin-store.mjs';
+import { preflightLtiCaptureAdministration } from './lti-capture-admin-preflight.mjs';
 
 const unavailable = () => new Error('connector_oauth_runtime_unavailable');
 function fields(value, allowed) {
@@ -38,8 +40,9 @@ export async function createConnectorOAuthRuntime(configuration) {
     fields(configuration, ['database', 'keyCustody', 'canvas', 'gatewayAuthentication', 'http', 'lti']);
     const { database, keyCustody, canvas, gatewayAuthentication, http, lti } = configuration;
     if (lti !== undefined) {
-      fields(lti, ['selfManagedOriginAllowlist','allowedPrivateAddresses','ca','timeoutMs','services']);
+      fields(lti, ['selfManagedOriginAllowlist','allowedPrivateAddresses','ca','timeoutMs','services','captures']);
       if(lti.services!==undefined&&typeof lti.services!=='boolean')throw unavailable();
+      if(lti.captures!==undefined&&typeof lti.captures!=='boolean'||lti.captures===true&&lti.services!==true)throw unavailable();
     }
     fields(keyCustody, ['openbaoOrigin', 'mount', 'keyPath', 'keyNamespace', 'tokenProvider', 'ca', 'timeoutMs']);
     fields(gatewayAuthentication, ['gatewayOrigin', 'sessionCookieName', 'ca', 'timeoutMs']);
@@ -60,9 +63,10 @@ export async function createConnectorOAuthRuntime(configuration) {
     const lifecycle = createCanvasOAuthLifecycle({ publicOrigin: http.publicOrigin,
       completionUrl: http.completionUrl, repository, secretVault, provider,requireConfiguredClient:true });
     service = createConnectorHttpsService({ ...http, lifecycle, authenticateAndAuthorize,...(ltiServices===undefined?{}:{ltiServices}),
+      ...(lti?.captures===true?{ltiCaptureStore:createLtiCaptureAdminStore(pool)}:{}),
       ...(lti === undefined ? {} : {
         ltiLifecycle:createLtiLaunchLifecycle({repository:createLtiLaunchRepository(pool),publicOrigin:http.publicOrigin,
-          platformPolicy:Object.fromEntries(Object.entries(lti).filter(([key])=>key!=='services'))}),
+          platformPolicy:Object.fromEntries(Object.entries(lti).filter(([key])=>!['services','captures'].includes(key)))}),
         ltiRegistrationStore:createLtiRegistrationAdminStore(pool),
         ltiIdentityStore:createLtiProviderIdentityStore(pool),
         ltiSelfManagedOriginAllowlist:lti.selfManagedOriginAllowlist??[],
@@ -152,6 +156,7 @@ export async function createConnectorOAuthRuntime(configuration) {
       if (result?.rows?.length !== 1 || result.rows[0].ready !== true) throw unavailable();
       if (lti !== undefined) await preflightLtiRuntime(pool);
       if(ltiServices!==undefined)await preflightLtiServices(pool);
+      if(lti?.captures===true)await preflightLtiCaptureAdministration(pool);
       const policy = await pool.query('SELECT request_limit,window_ms,hits FROM canvas_connector.oauth_http_limit WHERE singleton=true');
       if (policy?.rows?.length !== 1 || !Number.isInteger(policy.rows[0].request_limit)
           || policy.rows[0].request_limit < 1 || policy.rows[0].request_limit > 1000

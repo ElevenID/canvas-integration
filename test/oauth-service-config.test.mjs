@@ -58,12 +58,12 @@ test('unknown fields, raw credentials, missing versions and reused secret paths 
 test('explicit LTI policy has a separate CA file and no replacement authority or transport fields', { skip: !posix },async t=>{
   const f=await fixture(t);
   f.configuration.lti={selfManagedOriginAllowlist:['https://self-managed.example'],allowedPrivateAddresses:['127.0.0.1'],
-    caFile:f.files.ca,timeoutMs:5000,services:true};
+    caFile:f.files.ca,timeoutMs:5000,services:true,captures:true};
   await writeFile(f.path,JSON.stringify(f.configuration));
   const loaded=await loadConnectorOAuthConfiguration({path:f.path});
-  assert.deepEqual(loaded.lti,{selfManagedOriginAllowlist:['https://self-managed.example'],allowedPrivateAddresses:['127.0.0.1'],ca:'synthetic CA\n',timeoutMs:5000,services:true});
+  assert.deepEqual(loaded.lti,{selfManagedOriginAllowlist:['https://self-managed.example'],allowedPrivateAddresses:['127.0.0.1'],ca:'synthetic CA\n',timeoutMs:5000,services:true,captures:true});
   assert.deepEqual(loaded.canvas,{});
-  for(const change of [v=>v.lti=null,v=>v.lti=false,v=>{v.lti.services='true';},v=>{v.lti.ca='inline';},v=>{v.lti.verify=()=>true;v.lti.gatewayKey='forbidden';}]) {
+  for(const change of [v=>v.lti=null,v=>v.lti=false,v=>{v.lti.services='true';},v=>{v.lti.captures='true';},v=>{v.lti.services=false;},v=>{v.lti.ca='inline';},v=>{v.lti.verify=()=>true;v.lti.gatewayKey='forbidden';}]) {
     const value=structuredClone(f.configuration);change(value);await writeFile(f.path,JSON.stringify(value));
     await assert.rejects(loadConnectorOAuthConfiguration({path:f.path}),denied);
   }

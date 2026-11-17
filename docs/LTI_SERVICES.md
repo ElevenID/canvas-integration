@@ -230,16 +230,53 @@ configuration checks; signing-key ciphertext, nonce, tag and wrapping-key ID
 reads are denied. It has no signing-key generation or credential-exchange grants.
 The service-role fixture separately provisions its synthetic key and credential.
 
-These adapters are not mounted in the daemon. Canonical Gateway-authorized route
-administration/audits, production restricted-role startup checks and scheduler
-integration remain to be implemented and qualified. Fixture owner route creation
-does not qualify a public operator workflow. Current Gateway authority remains
-mandatory at observation admission; local SQL configuration confers no Core grant.
+## Capture route administration
+
+Enable `lti.captures: true` together with `lti.services: true` to mount the capture
+administration API. Owner migration020 adds immutable original actor/intent audits.
+Startup checks the explicit capture INSERT/UPDATE columns, retained history,
+enabled guards, invoker functions, sequence usage and absence of sequence-reset
+privileges across MEMBER-reachable roles. The existing service check still applies.
+This is a capability check, not complete schema provenance or a tenant SQL sandbox.
+
+POST form routes live under
+`/platforms/{platformId}/lti/registrations/{registrationId}/capture-routes/`.
+Use `catalog` for a bounded page, or `{routeId}/inspect`, `receipt`, `capture`,
+`create`, `replace`, `activate`, `deactivate` and `schedule`. Mutations require an
+original operation UUID. Create/replace specify a published service attempt,
+provider query, selected claims and current platform/registration/key revisions;
+other changes also compare the route revision. Create/replace leave the route
+disabled. Scheduling uses its original operation UUID as the durable capture ID.
+Deactivation requires the route version and remains possible after parent disable
+or token expiry. Inspect/receipt/catalog/status return explicit scoped metadata,
+without bearer, signing-key, internal dispatch or Core subject/application fields.
+
+The server derives tenant and actor from the current public Gateway session and
+exact edit permission, reads the canonical binding itself, then checks its source,
+resource scope, claim rules, revision and active application. The original transient
+snapshot is rechecked after final asynchronous authorization. A separate bounded
+deadline, limited by snapshot freshness and application expiry, is checked again
+after SQL locks and writes. That deadline is not part of persisted intent or a
+local authority mirror. Current Gateway admission still independently decides
+whether each delivered observation is authorized.
+
+Exact retries reconcile immutable original receipts before consulting changing
+bindings or local versions. A concurrent original commit discovered during later
+prechecks is reconciled without a write retry. Changed actor/intent replays conflict.
+Audit faults roll back route changes, scheduling and receipt together, including
+changes made by an audit trigger to a scheduled job or parent configuration.
+Permission loss after commit returns403 and can leave an unknown outcome: retain
+the original operation UUID and use its receipt endpoint after access is restored.
+A403 response must not be treated as proof of rollback by a future browser control.
+
+The local contract uses actual Gateway/connector HTTPS and restricted PostgreSQL
+roles with synthetic data. The capture worker, scheduler, private worker configuration
+and browser controls for these new routes still need composition and qualification.
 
 ## Durable work still required in this batch
 
 Finish deployed retention policy and LTI
-capture configuration and worker composition through the existing Gateway outbox.
+worker/scheduler/browser composition through the existing Gateway outbox.
 Operator receipt and unknown-provider resolution are mounted as described above.
 An uncertain token exchange must
 not silently regenerate its attempt or assertion. Current registration, tool-key,

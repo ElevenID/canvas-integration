@@ -44,7 +44,14 @@ export async function ltiServiceHttpContract(configuration,{pool,owner}) {
   assert.equal((await send(disabledAddress,`/lti/registrations/${randomUUID()}/jwks`,{},'GET')).status,404);await disabled.close();
   const missing=await runtime();await assert.rejects(missing.listen(),/connector_oauth_runtime_unavailable/);await missing.close();
   owner('GRANT canvas_lti_services TO canvas_oauth_http;');
+  const capturesConfigured={...configured,lti:{...configured.lti,captures:true}};
+  const missingCaptures=await runtime(capturesConfigured);await assert.rejects(missingCaptures.listen(),/connector_oauth_runtime_unavailable/);await missingCaptures.close();
+  owner('GRANT canvas_lti_capture_admin TO canvas_oauth_http;');
+  const capturesLive=await runtime(capturesConfigured),capturesAddress=await capturesLive.listen();
+  assert.equal((await send(capturesAddress,`/platforms/absent/lti/registrations/${randomUUID()}/capture-routes/catalog`)).status,200);
+  await capturesLive.close();
   const live=await runtime(),address=await live.listen(),platformId='mounted-lti-platform',registrationId=randomUUID();
+  assert.equal((await send(address,`/platforms/absent/lti/registrations/${randomUUID()}/capture-routes/catalog`)).status,404);
   owner(`INSERT INTO canvas_connector.platforms(organization_id,id,canvas_origin,enabled) VALUES('${org}','${platformId}','${canvas.origin}',true);
    INSERT INTO canvas_connector.lti_registrations(id,organization_id,platform_id,client_id,deployment_id,trust_profile,target_link_uri,enabled)
    VALUES('${registrationId}','${org}','${platformId}','mounted-client','deployment','self_managed_same_origin','https://localhost/lti/registrations/${registrationId}/resource',true);`);
