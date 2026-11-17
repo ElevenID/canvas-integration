@@ -278,9 +278,10 @@ Automatic cadence remains private worker configuration.
 Capture mutations save only a scoped receipt pointer before sending. A lost response
 or postcommit403 retains the original operation UUID through reload and blocks
 another mutation from that form. Receipt reconciliation checks the registration,
-route, action and capture ID, in addition to the operation/platform. Mismatched
-receipts cannot clear the pointer. No request body, claims, provider user, token or
-credential attempt is saved in this journal. Manual receipt inspection also supports
+route, action, expected receipt version, published attempt reference and capture ID,
+in addition to the operation/platform. Mismatched receipts cannot clear the pointer.
+Only the nonsecret published-attempt UUID and expected version accompany its receipt
+path; no request body, claims, provider user or token is saved. Manual receipt inspection also supports
 an original capture operation ID.
 
 The local contract uses actual Gateway/connector HTTPS and restricted PostgreSQL

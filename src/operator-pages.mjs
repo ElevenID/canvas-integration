@@ -93,8 +93,11 @@ function operatorBrowser() {
       && entry.path.startsWith('/platforms/' + entry.platformId + '/') && /\/(?:create|change|provision|rotate|disconnect|replace|activate|deactivate|schedule|recover|exchange|resolve)$/.test(entry.path)
       && entry.receiptPath === entry.path.replace(/[^/]+$/, entry.formId==='lti-service-recovery'?'resolution-receipt':'receipt') && pathAllowed(entry.receiptPath)
       && entry.extras && typeof entry.extras === 'object' && !Array.isArray(entry.extras)
-      && (entry.formId==='lti-service-recovery' ? Object.keys(entry.extras).join(',')==='attempt_id'&&uuid(entry.extras.attempt_id)
-        : ['lti-key','lti-credential','lti-capture-edit','lti-capture-action'].includes(entry.formId)?Object.keys(entry.extras).length===0
+      && (['lti-capture-edit','lti-capture-action'].includes(entry.formId)?Object.keys(entry.extras).sort().join(',')==='expectedVersion,serviceOperationId'
+          &&Number.isSafeInteger(entry.extras.expectedVersion)&&entry.extras.expectedVersion>0
+          &&(entry.path.endsWith('/deactivate')?entry.extras.serviceOperationId===null:uuid(entry.extras.serviceOperationId))
+        : entry.formId==='lti-service-recovery' ? Object.keys(entry.extras).join(',')==='attempt_id'&&uuid(entry.extras.attempt_id)
+        : ['lti-key','lti-credential'].includes(entry.formId)?Object.keys(entry.extras).length===0
         : Object.keys(entry.extras).length === 0 || (Object.keys(entry.extras).join(',') === 'authorization_id' && hash(entry.extras.authorization_id)));
   }
   try {
@@ -121,7 +124,8 @@ function operatorBrowser() {
     if(['lti-capture-edit','lti-capture-action'].includes(entry.formId)) {
       const parts=entry.path.split('/'),action=parts[8];
       return receipt.platformId===entry.platformId&&receipt.registrationId===parts[5]&&receipt.routeId===parts[7]&&receipt.action===action
-        &&Number.isSafeInteger(receipt.version)&&receipt.version>0&&uuid(receipt.serviceOperationId)&&receipt.enabled===['activate','schedule'].includes(action)
+        &&receipt.version===entry.extras.expectedVersion&&uuid(receipt.serviceOperationId)
+        &&(entry.extras.serviceOperationId===null||receipt.serviceOperationId===entry.extras.serviceOperationId)&&receipt.enabled===['activate','schedule'].includes(action)
         &&receipt.captureId===(action==='schedule'?entry.operationId:null);
     }
     return receipt.platformId === entry.platformId;
@@ -202,8 +206,13 @@ function operatorBrowser() {
     if(previous&&(!recovering||previous.organizationId!==organizationId||previous.operationId!==values.attempt_id||previous.receiptPath!==receiptPath)) {notice('This form has an unconfirmed operation. Inspect its original receipt first.');return;}
     const operationId = recovering?values.attempt_id:window.crypto.randomUUID(), platformId = path.split('/')[2];
     if(!uuid(operationId))throw Error('invalid_input');
-    const entry = previous??{ formId: form.id, organizationId, platformId, path, receiptPath, operationId,
-      extras: form.id==='lti-service-recovery'?{attempt_id:values.attempt_id}:values.authorization_id ? { authorization_id: values.authorization_id } : {} };
+    let extras=form.id==='lti-service-recovery'?{attempt_id:values.attempt_id}:values.authorization_id?{authorization_id:values.authorization_id}:{};
+    if(['lti-capture-edit','lti-capture-action'].includes(form.id)) {
+      const action=path.split('/').at(-1),expectedVersion=action==='create'?1:Number(number(values.expected_route_version))+(action==='schedule'?0:1);
+      if(!Number.isSafeInteger(expectedVersion)||expectedVersion<1||action!=='deactivate'&&!uuid(values.service_operation_id))throw Error('invalid_input');
+      extras={expectedVersion,serviceOperationId:action==='deactivate'?null:values.service_operation_id};
+    }
+    const entry = previous??{ formId: form.id, organizationId, platformId, path, receiptPath, operationId,extras };
     if(!previous)save([...journal, entry]);
     show({operationId,platformId,status:'pending'});
     notice('Submitting operation ' + operationId + '. Keep this ID until the result is confirmed.');

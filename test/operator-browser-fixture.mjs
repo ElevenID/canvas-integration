@@ -90,8 +90,10 @@ front.setHandler((req,res) => { void (async () => {
       loseCaptureReply=false;reply.resume();reply.on('end',()=>res.destroy());return;
     }
     if(forgeCaptureReceipt&&/\/capture-routes\/[^/]+\/receipt$/.test(req.url)&&reply.statusCode===200) {
-      forgeCaptureReceipt=false;const chunks=[];reply.on('data',c=>chunks.push(c));reply.on('end',()=>{
-        const value=JSON.parse(Buffer.concat(chunks).toString());value.receipt.routeId='another-route';const body=JSON.stringify(value);
+      const corruption=forgeCaptureReceipt;forgeCaptureReceipt=false;const chunks=[];reply.on('data',c=>chunks.push(c));reply.on('end',()=>{
+        const value=JSON.parse(Buffer.concat(chunks).toString());
+        if(corruption==='version')value.receipt.version+=1;else if(corruption==='service')value.receipt.serviceOperationId=randomUUID();else value.receipt.routeId='another-route';
+        const body=JSON.stringify(value);
         res.writeHead(200,{...reply.headers,'content-length':Buffer.byteLength(body)});res.end(body);
       });return;
     }
@@ -231,16 +233,28 @@ try {
   await submit('lti-capture-action',{action:'catalog',registration_id:registration});assert.equal((await output()).routes[0].routeId,'operator-lti-route');
   loseCaptureReply=true;await submit('lti-capture-action',{action:'schedule',...captureTarget,expected_route_version:'2'});
   const pendingCapture=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('elevenid_canvas_operator_pending_v1')));
-  assert.equal(pendingCapture.length,1);assert.equal(pendingCapture[0].formId,'lti-capture-action');assert.deepEqual(pendingCapture[0].extras,{});
+  assert.equal(pendingCapture.length,1);assert.equal(pendingCapture[0].formId,'lti-capture-action');assert.deepEqual(pendingCapture[0].extras,{expectedVersion:2,serviceOperationId:captureCredential});
   const captureOperation=pendingCapture[0].operationId,beforeCaptureReceipt=mutationRequests;
   await page.reload();await wait();await page.locator('#platform-id').fill('operator-platform');await click('#inspect-platform');
   await submit('lti-capture-action',{action:'schedule',...captureTarget,expected_route_version:'2'});assert.equal(mutationRequests,beforeCaptureReceipt);
-  forgeCaptureReceipt=true;await click('#operations button');assert.equal(await page.locator('#operations li').count(),1,'wrong route receipt cannot clear original pointer');
+  const corruptKind=structuredClone(pendingCapture);corruptKind[0].formId='route-action';
+  await page.evaluate(value=>sessionStorage.setItem('elevenid_canvas_operator_pending_v1',JSON.stringify(value)),corruptKind);await page.reload();
+  assert.match(await page.locator('#notice').textContent(),/storage/);
+  await page.evaluate(value=>sessionStorage.setItem('elevenid_canvas_operator_pending_v1',JSON.stringify(value)),pendingCapture);await page.reload();await wait();
+  for(const corruption of ['route','version','service']) {
+    forgeCaptureReceipt=corruption;await click('#operations button');assert.equal(await page.locator('#operations li').count(),1,'mismatched '+corruption+' receipt cannot clear original pointer');
+  }
   await click('#operations button');assert.equal((await output()).receipt.captureId,captureOperation);assert.equal(await page.locator('#operations li').count(),0);
   assert.equal(mutationRequests,beforeCaptureReceipt);
   assert.equal(owner(`SELECT count(*) FROM canvas_connector.lti_capture_operation_audit WHERE organization_id='${org}' AND operation_id='${captureOperation}';`),'1');
+  await page.locator('#platform-id').fill('operator-platform');await click('#inspect-platform');
   await submit('lti-capture-action',{action:'capture',registration_id:registration,resource_id:'operator-lti-route',capture_id:captureOperation});assert.equal((await output()).capture.phase,'pending');
   await submit('receipt',{kind:'lti-capture',registration_id:registration,resource_id:'operator-lti-route',operation_id:captureOperation});assert.equal((await output()).receipt.captureId,captureOperation);
+  await submit('lti-capture-action',{action:'deactivate',registration_id:registration,resource_id:'operator-lti-route',expected_route_version:'2'});assert.equal((await output()).receipt.version,3);
+  await submit('lti-capture-edit',{action:'replace',registration_id:registration,resource_id:'operator-lti-route',expected_route_version:'3',expected_registration_version:'2',expected_key_version:'1',
+    service_operation_id:captureCredential,producer_ref:'operator-source',binding_id:'operator-lti-binding',binding_revision:'1',fact_type:'canvas.ags_result',
+    course_id:'11',provider_user_id:'opaque:operator',resource_link_id:'operator-link',line_item_id:'33'});
+  assert.equal((await output()).receipt.version,4);assert.equal((await output()).receipt.enabled,false);
   revokeCaptureAfterCommit=true;
   await submit('lti-capture-edit',{action:'create',registration_id:registration,resource_id:'operator-lti-member',expected_registration_version:'2',expected_key_version:'1',
     service_operation_id:captureCredential,producer_ref:'operator-source',binding_id:'operator-lti-member-binding',binding_revision:'1',fact_type:'canvas.nrps_membership',
@@ -248,7 +262,8 @@ try {
   assert.match(await page.locator('#notice').textContent(),/permission/);
   const committedForbidden=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('elevenid_canvas_operator_pending_v1')));
   assert.equal(committedForbidden.length,1);assert.equal(committedForbidden[0].formId,'lti-capture-edit');
-  for(const privateValue of ['opaque:operator',captureCredential,'provider_state',secret])assert.equal(JSON.stringify(committedForbidden).includes(privateValue),false);
+  assert.deepEqual(committedForbidden[0].extras,{expectedVersion:1,serviceOperationId:captureCredential});
+  for(const privateValue of ['opaque:operator','provider_state',secret,'synthetic_operator_lti_access_token_00001'])assert.equal(JSON.stringify(committedForbidden).includes(privateValue),false);
   assert.equal(owner(`SELECT count(*) FROM canvas_connector.lti_capture_operation_audit WHERE organization_id='${org}' AND operation_id='${committedForbidden[0].operationId}';`),'1');
   const beforeForbiddenReceipt=mutationRequests;permitted=true;await page.reload();await wait();await click('#operations button');
   assert.equal((await output()).receipt.routeId,'operator-lti-member');assert.equal(await page.locator('#operations li').count(),0);assert.equal(mutationRequests,beforeForbiddenReceipt);
