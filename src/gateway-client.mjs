@@ -42,7 +42,9 @@ function jsonValue(value, depth = 0) {
   const output = Object.create(null);
   for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
     if (!('value' in descriptor) || ['__proto__', 'constructor', 'prototype', 'toJSON',
-      'organization_id', 'organizationId', 'issuer_key', 'signing_key'].includes(key)) fail('invalid_body');
+      'organization_id', 'organizationId', 'issuer_key', 'signing_key',
+      'canvas_credentials', 'access_token', 'refresh_token', 'client_secret',
+      'accessToken', 'refreshToken', 'clientSecret', 'private_key', 'privateKey'].includes(key)) fail('invalid_body');
     output[key] = jsonValue(descriptor.value, depth + 1);
   }
   return output;

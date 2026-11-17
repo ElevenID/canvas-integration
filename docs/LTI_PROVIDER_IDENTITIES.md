@@ -17,6 +17,16 @@ The configured [Canvas substitution](https://developerdocs.instructure.com/servi
 is `$Canvas.user.id`. This is a provider assertion, not proof of Marty identity,
 account ownership, evidence verification or issuance authority.
 
+Owner migration022 additionally permits `canvas_course_id=$Canvas.course.id` in
+the signed custom claim. It uses the same numeric identifier normalization and
+is persisted only as `canvasCourseId` in the accepted protocol context. Missing
+course substitution remains absent; the opaque LTI context ID, browser fields,
+top-level lookalikes and user ID never supply it. Malformed or unexpanded course
+substitutions reject the launch. This identifies provider query context and
+confers no canonical identity, application, binding or capture authority.
+The [Canvas substitution documentation](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.tools_variable_substitutions)
+defines course availability; launch contexts without a course remain supported.
+
 Observation requires an accepted launch receipt and its original browser proof.
 New observations recheck current platform/registration revisions, expiry and
 protocol claims inside the database transaction. Matching retries return the

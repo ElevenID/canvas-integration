@@ -98,6 +98,10 @@ There are **no automatic write retries**. A network failure can leave the result
 unknown: reconcile through a read before retrying. Header preservation is
 covered here; actual Gateway idempotency remains an integration acceptance gate.
 
+The compatibility client rejects `canvas_credentials`, access/refresh tokens,
+client secrets and private-key fields, including inside nested management data.
+Provision provider credentials through the connector-owned administration service.
+
 The operation allowlist does not narrow an overprivileged key on the server.
 Gateway key scope/tenant checks and deployment network policy remain independent
 security boundaries. Do not use `integrations:write` for the normal reader.

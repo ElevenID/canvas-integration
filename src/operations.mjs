@@ -5,7 +5,7 @@ const base = '/v1/integrations/canvas';
 const platformFields = ['display_name', 'canvas_base_url', 'lti_client_id', 'lti_deployment_id', 'enabled'];
 const bindingFields = ['application_template_id', 'credential_template_id', 'display_name',
   'auto_approve_on_evidence', 'evidence_requirements', 'canvas_scope', 'delivery_mode',
-  'approval_policy_set_id', 'deployment_profile_id', 'feature_flags', 'canvas_credentials'];
+  'approval_policy_set_id', 'deployment_profile_id', 'feature_flags'];
 const filters = ['status', 'platform_id', 'binding_id'];
 const definitions = [
   ['listCanvasPlatforms', 'GET', `${base}/platforms`, 'list', [], true],

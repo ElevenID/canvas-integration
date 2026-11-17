@@ -141,9 +141,10 @@ export function validateCanvasResourceLinkLaunch({ token, jwksText, expected, no
     // from sub, login hints, email, roles or browser request fields.
     const custom=own(claims,CLAIM+'custom')?object(claims[CLAIM+'custom']):null;
     const canvasUserId=custom && own(custom,'canvas_user_id')?canvasId(custom.canvas_user_id):undefined;
+    const canvasCourseId=custom && own(custom,'canvas_course_id')?canvasId(custom.canvas_course_id):undefined;
     return Object.freeze({ issuer, clientId, deploymentId, subject, nonce, issuedAt, expiresAt, notBefore,
       targetLinkUri, resourceLinkId, contextId, messageType: 'LtiResourceLinkRequest', version: '1.3.0',
-      ...(canvasUserId===undefined?{}:{canvasUserId}) });
+      ...(canvasUserId===undefined?{}:{canvasUserId}),...(canvasCourseId===undefined?{}:{canvasCourseId}) });
   } catch {
     // Never reflect bearer claims, trusted configuration, keys or crypto errors.
     throw new Error('invalid_lti_launch');

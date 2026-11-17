@@ -154,6 +154,24 @@ test('body cannot smuggle organization, issuer keys or JSON hooks', async () => 
   }
   assert.equal(seen.length, 0);
 });
+test('compatibility management cannot export Canvas credentials, including nested fields', async () => {
+  reply({ accepted: true });
+  const names = ['canvas_credentials', 'access_token', 'refresh_token', 'client_secret',
+    'accessToken', 'refreshToken', 'clientSecret', 'private_key', 'privateKey'];
+  for (const operation of ['createCanvasProgramBinding', 'updateCanvasProgramBinding']) {
+    const scoped = client({ allowedOperations: [operation] });
+    for (const name of names) {
+      for (const body of [{ [name]: 'synthetic-provider-secret' },
+        { canvas_scope: { [name]: 'synthetic-provider-secret' } },
+        { feature_flags: { nested: [{ [name]: 'synthetic-provider-secret' }] } }]) {
+        await assert.rejects(scoped.execute(operation, { id: 'binding', body,
+          ...(operation === 'createCanvasProgramBinding' ? { idempotencyKey: 'synthetic-stable-request-0001' } : {}) }), error('invalid_body'));
+      }
+    }
+  }
+  assert.equal(seen.length, 0, 'credential-shaped management requests fail before any Gateway request');
+});
+
 test('list response normalization does not silently hide schema failures', async () => {
   reply({ items: [{ id: 'synthetic' }] });
   assert.deepEqual(await client().execute('listCanvasSyncJobs'), [{ id: 'synthetic' }]);

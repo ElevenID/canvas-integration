@@ -44,6 +44,22 @@ test('only the signed Canvas numeric substitution can supplement the opaque prov
   assert.equal(validateCanvasResourceLinkLaunch(input({token:token(body)})).canvasUserId,undefined);
 });
 
+test('numeric course is accepted only from the signed course substitution, never context or lookalikes', () => {
+  for (const [value, normalized] of [['18446744073709551615', '18446744073709551615'], [42, '42']]) {
+    const body = claims();body[C + 'custom'] = { canvas_course_id: value };
+    const result = validateCanvasResourceLinkLaunch(input({ token: token(body) }));
+    assert.equal(result.canvasCourseId, normalized);
+    assert.equal(result.contextId, 'course-1');assert.equal(result.canvasUserId, undefined);
+  }
+  for (const value of [null, {}, [], true, '0', '01', '-1', '1.1', '18446744073709551616', '$Canvas.course.id', 9007199254740992]) {
+    const body = claims();body[C + 'custom'] = { canvas_course_id: value };
+    denied(input({ token: token(body) }));
+  }
+  const body = claims();body[C + 'context'] = { id: '42', canvas_course_id: '99' };
+  body.canvas_course_id = '99';body[C + 'custom'] = { course_id: '99' };
+  assert.equal(validateCanvasResourceLinkLaunch(input({ token: token(body) })).canvasCourseId, undefined);
+});
+
 test('valid resource launch returns only frozen protocol identifiers; ignores future claims', () => {
   const result = validateCanvasResourceLinkLaunch(input());
   assert.deepEqual(result, { issuer: expected.issuer, clientId: expected.clientId,
