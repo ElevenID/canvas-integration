@@ -269,17 +269,30 @@ Permission loss after commit returns403 and can leave an unknown outcome: retain
 the original operation UUID and use its receipt endpoint after access is restored.
 A403 response must not be treated as proof of rollback by a future browser control.
 
+The operator console exposes capture forms only when the capture API is mounted.
+Create/replace selects AGS scores or NRPS status, an opaque provider user/resource
+and a published credential attempt. Separate controls inspect/catalog routes,
+activate/deactivate, manually schedule a capture and inspect its original status.
+Automatic cadence remains private worker configuration.
+
+Capture mutations save only a scoped receipt pointer before sending. A lost response
+or postcommit403 retains the original operation UUID through reload and blocks
+another mutation from that form. Receipt reconciliation checks the registration,
+route, action and capture ID, in addition to the operation/platform. Mismatched
+receipts cannot clear the pointer. No request body, claims, provider user, token or
+credential attempt is saved in this journal. Manual receipt inspection also supports
+an original capture operation ID.
+
 The local contract uses actual Gateway/connector HTTPS and restricted PostgreSQL
-roles with synthetic data. The separate LTI-only worker now composes keyless capture,
+roles with synthetic data. The separate LTI-only worker composes keyless capture,
 durable cadence and Gateway delivery; see [worker service](WORKER_SERVICE.md).
-Browser controls for these capture routes remain to be composed and qualified.
 
 ## Durable work still required in this batch
 
 Finish deployed retention policy and LTI
-browser composition through the existing Gateway outbox, plus deployed worker
-role/agent/network qualification. Worker mode and durable cadence are composed
-locally; this does not establish deployed production permissions or a live provider.
+deployed worker role/agent/network qualification and retained work disposition.
+Worker mode, durable cadence and capture controls are composed locally; this does
+not establish deployed production permissions or a live provider.
 Operator receipt and unknown-provider resolution are mounted as described above.
 An uncertain token exchange must
 not silently regenerate its attempt or assertion. Current registration, tool-key,

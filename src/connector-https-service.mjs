@@ -100,7 +100,7 @@ export function createConnectorHttpsService(configuration = {}) {
     const assets = {
       '/admin': ['text/html; charset=utf-8', () => operatorPage([
         ...(platforms ? ['platforms'] : []), ...(clients ? ['clients'] : []), ...(connections ? ['connections'] : []),
-        ...(captures ? ['captures'] : []), ...(ltiAdmin ? ['lti'] : []), ...(ltiServices?['lti-services']:[]), ...(recovery ? ['recovery'] : [])])],
+        ...(captures ? ['captures'] : []), ...(ltiAdmin ? ['lti'] : []), ...(ltiServices?['lti-services']:[]), ...(ltiCaptures?['lti-captures']:[]), ...(recovery ? ['recovery'] : [])])],
       '/admin/app.js': ['text/javascript; charset=utf-8', () => operatorScript],
       '/admin/styles.css': ['text/css; charset=utf-8', () => operatorStyles],
       '/complete': ['text/html; charset=utf-8', () => operatorCompletionPage],
