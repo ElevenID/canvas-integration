@@ -96,7 +96,7 @@ what the platform may accept, never a trusted/approved flag supplied by Canvas.
 
 Canvas-facing LTI/OIDC callbacks eventually terminate in the connector. Their
 protocol authentication is separate from, and never substitutes for, the API
-key on every connector-to-core operation. No long-lived key belongs in React,
+key on every connector-to-platform operation through the public Common Gateway. No long-lived key belongs in React,
 localStorage, Canvas launch claims or browser requests. The REST reader's
 caller must bind course/learner identifiers from verified server-side identity
 mapping; OAuth token possession alone does not authorize arbitrary browser IDs.
@@ -131,4 +131,8 @@ specific authority and operational requirements are implemented and verified.
 
 This scope supersedes the original production-before-retirement sequence. The
 Marty UI removal is consolidated in ElevenID/marty-ui PR #1987, with paired Core
-PR #444 and common Gateway PR #158. No merge or deployment is implied by this record.
+PR #444 and common Gateway PR #158. All three are merged. Their accepted source
+checkpoints are UI `958615920f7b9d10829e175f1e275cf2ea579e22`, Core
+`1f3c1258297556804de76762141f66eb5fcd7dfd` and Common
+`4f28691f4985fe84a7b1421b2d00dc33f5dcaacf`. This records source integration,
+not production activation, deployment qualification or data migration.
