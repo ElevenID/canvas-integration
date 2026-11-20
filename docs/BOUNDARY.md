@@ -94,10 +94,12 @@ Do not grant routine workers platform management or approval permissions. Provid
 observations are unsigned inputs; source registration and canonical policy determine
 what the platform may accept, never a trusted/approved flag supplied by Canvas.
 
-Canvas-facing LTI/OIDC callbacks eventually terminate in the connector. Their
-protocol authentication is separate from, and never substitutes for, the API
-key on every connector-to-platform operation through the public Common Gateway. No long-lived key belongs in React,
-localStorage, Canvas launch claims or browser requests. The REST reader's
+Canvas-facing LTI/OIDC callbacks terminate in the connector and use Canvas
+protocol authentication. Through the public Common Gateway, evidence submission
+and identity association use scoped producer API keys. Administration, binding
+inspection and ownership use the selected Gateway session and its permissions.
+Keep long-lived producer keys on the server, outside React, localStorage,
+Canvas launch claims and browser requests. The REST reader's
 caller must bind course/learner identifiers from verified server-side identity
 mapping; OAuth token possession alone does not authorize arbitrary browser IDs.
 
